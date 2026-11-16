@@ -8,6 +8,7 @@ const Game := preload("res://src/triage_game.gd")
 const Solver := preload("res://src/triage_solver.gd")
 const Piece := preload("res://src/piece.gd")
 const Sfx := preload("res://src/sfx.gd")
+const MapView := preload("res://src/map_view.gd")
 
 const PALETTE: Array[Color] = [
 	Color("e4572e"), Color("3b8eea"), Color("f2c14e"),
@@ -46,6 +47,12 @@ var _revealed: Dictionary = {}
 ## déjà à jour au moment de la touche, l'affichage change quand le train arrive vraiment.
 var _slot_view: Array[Dictionary] = []
 var _pending_view: Array = []
+## Numéros d'ordre des mises à jour de ces vues : en jouant très vite, deux animations
+## peuvent se terminer dans le désordre ; on n'applique jamais un état plus ancien que
+## celui déjà affiché (par quai, et pour la liste des trains à venir).
+var _view_seq: int = 0
+var _view_applied: int = 0
+var _slot_applied: Array[int] = []
 var _gen: int = 0
 var _stars_total: int = 0
 var _stars_shown: int = 0
@@ -56,10 +63,9 @@ var _save_enabled: bool = true
 var _pieces: Node2D
 var _sfx: Sfx
 var _title: Button
-var _picker: ColorRect
-var _picker_title: Label
-var _picker_grid: GridContainer
-var _picker_close: Button
+var _map: MapView
+## Ligne : régions et noms de gares (data/line.json).
+var _line: Dictionary = {}
 var _hint: Label
 var _stars_label: Label
 var _pending_label: Label
@@ -75,6 +81,7 @@ var _star_row: Control
 func _ready() -> void:
 	RenderingServer.set_default_clear_color(BG)
 	_levels = JSON.parse_string(FileAccess.get_file_as_string("res://data/levels.json"))
+	_line = JSON.parse_string(FileAccess.get_file_as_string("res://data/line.json"))
 	_pieces = Node2D.new()
 	add_child(_pieces)
 	_sfx = Sfx.new()
@@ -85,6 +92,9 @@ func _ready() -> void:
 	_save_enabled = OS.get_cmdline_user_args().is_empty()
 	_load_progress()
 	_start_level(clampi(int(_progress["level"]), 0, _levels.size() - 1))
+	# Le jeu s'ouvre sur la carte de la ligne (sauf lors des vérifications automatiques).
+	if _save_enabled:
+		_open_map()
 	_debug_hook()
 
 
@@ -106,6 +116,19 @@ func _save_progress() -> void:
 	if f != null:
 		f.store_string(JSON.stringify(_progress))
 		f.close()
+
+
+## Dernière gare atteinte sur la ligne.
+func _reached() -> int:
+	return int(_progress.get("reached", _progress["level"]))
+
+
+func _region(index: int) -> Dictionary:
+	var found: Dictionary = _line["regions"][0]
+	for r: Dictionary in _line["regions"]:
+		if int(r["first"]) <= index:
+			found = r
+	return found
 
 
 func _total_stars() -> int:
@@ -135,8 +158,8 @@ func _button(text: String, font_size: int, action: Callable) -> Button:
 func _build_ui() -> void:
 	var layer: CanvasLayer = CanvasLayer.new()
 	add_child(layer)
-	# Le titre est un bouton : il ouvre le choix du niveau.
-	_title = _button("", 34, _open_picker)
+	# Le titre est un bouton : il ouvre la carte de la ligne.
+	_title = _button("", 30, _open_map)
 	_title.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_stars_label = _label(26)
 	_hint = _label(23)
@@ -160,45 +183,25 @@ func _build_ui() -> void:
 	_overlay.add_child(_star_row)
 	_overlay_button = _button("", 38, _on_overlay_button)
 	_overlay.add_child(_overlay_button)
-	_overlay_alt = _button("Recommencer le niveau", 30, func() -> void: _start_level(_level_index))
+	_overlay_alt = _button("", 30, _on_overlay_alt)
 	_overlay.add_child(_overlay_alt)
-	_picker = ColorRect.new()
-	_picker.color = Color(0.1, 0.1, 0.15, 0.92)
-	_picker.visible = false
-	layer.add_child(_picker)
-	_picker_title = Label.new()
-	_picker_title.text = "Choisir un niveau"
-	_picker_title.add_theme_font_size_override("font_size", 44)
-	_picker_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_picker.add_child(_picker_title)
-	_picker_grid = GridContainer.new()
-	_picker_grid.columns = 5
-	_picker_grid.add_theme_constant_override("h_separation", 10)
-	_picker_grid.add_theme_constant_override("v_separation", 10)
-	_picker.add_child(_picker_grid)
-	_picker_close = _button("Fermer", 32, func() -> void: _picker.visible = false)
-	_picker.add_child(_picker_close)
+	_map = MapView.new()
+	_map.stations = _line["stations"]
+	_map.regions = _line["regions"]
+	_map.visible = false
+	_map.level_picked.connect(_pick_level)
+	_map.closed.connect(func() -> void: _map.visible = false)
+	layer.add_child(_map)
 	_layout_ui()
 
 
-## Ouvre la grille des niveaux. Tous sont accessibles (utile pour les essais) ;
-## les points sous le numéro rappellent la meilleure note obtenue.
-func _open_picker() -> void:
-	for child: Node in _picker_grid.get_children():
-		_picker_grid.remove_child(child)
-		child.queue_free()
-	for i: int in _levels.size():
-		var stars: int = int(_progress["stars"].get(str(i), 0))
-		var b: Button = _button("%d\n%s" % [i + 1, "•".repeat(stars)], 30, _pick_level.bind(i))
-		b.custom_minimum_size = Vector2(100.0, 100.0)
-		if i == _level_index:
-			b.modulate = GOLD
-		_picker_grid.add_child(b)
-	_picker.visible = true
+## Ouvre la carte de la ligne. Toutes les gares restent accessibles (utile pour les essais).
+func _open_map() -> void:
+	_map.open(_level_index, _reached(), _progress["stars"])
 
 
 func _pick_level(index: int) -> void:
-	_picker.visible = false
+	_map.visible = false
 	_progress["level"] = index
 	_save_progress()
 	_start_level(index)
@@ -210,13 +213,9 @@ func _layout_ui() -> void:
 	var dy: float = maxf(0.0, _top_inset() - 50.0)
 	_title.position = Vector2(30.0, 62.0 + dy)
 	_title.size = Vector2(sz.x - 310.0, 56.0)
-	_picker.position = Vector2.ZERO
-	_picker.size = sz
-	_picker_title.position = Vector2(0.0, sz.y * 0.2 - 90.0)
-	_picker_title.size = Vector2(sz.x, 70.0)
-	_picker_grid.position = Vector2((sz.x - 540.0) / 2.0, sz.y * 0.2)
-	_picker_close.size = Vector2(300.0, 80.0)
-	_picker_close.position = Vector2((sz.x - 300.0) / 2.0, sz.y * 0.2 + 680.0)
+	_map.position = Vector2.ZERO
+	_map.top_inset = dy
+	_map.size = sz
 	_restart.size = Vector2(220.0, 56.0)
 	_restart.position = Vector2(sz.x - 260.0, 62.0 + dy)
 	_undo_button.size = Vector2(220.0, 56.0)
@@ -256,11 +255,11 @@ func _on_resize() -> void:
 
 
 ## Affiche le panneau de fin. `stars` > 0 : les étoiles tombent une à une.
-## `alt` : montre aussi le bouton secondaire « Recommencer le niveau ».
-func _show_overlay(text: String, button: String, stars: int, alt: bool) -> void:
+## `alt` : texte du bouton secondaire.
+func _show_overlay(text: String, button: String, stars: int, alt: String) -> void:
 	_overlay_label.text = text
 	_overlay_button.text = button
-	_overlay_alt.visible = alt
+	_overlay_alt.text = alt
 	_stars_total = stars
 	_stars_shown = 0
 	_star_row.queue_redraw()
@@ -296,6 +295,13 @@ func _on_overlay_button() -> void:
 		_start_level((_level_index + 1) % _levels.size())
 	else:
 		_undo()
+
+
+func _on_overlay_alt() -> void:
+	if _game.status() == Game.WON:
+		_open_map()
+	else:
+		_start_level(_level_index)
 
 
 # --- Géométrie ---------------------------------------------------------------
@@ -351,7 +357,8 @@ func _start_level(index: int) -> void:
 	_game = Game.new()
 	_game.load_level(_levels[index])
 	_rebuild()
-	_title.text = "Niveau %d / %d" % [index + 1, _levels.size()]
+	_title.text = "%d · %s" % [index + 1, _line["stations"][index]]
+	RenderingServer.set_default_clear_color(Color(str(_region(index)["game"])))
 	_stars_label.text = "Étoiles : %d / %d" % [_total_stars(), _levels.size() * 3]
 	_hint.text = str(_levels[index].get("hint", ""))
 
@@ -369,16 +376,38 @@ func _rebuild() -> void:
 	for slot: Dictionary in _game.slots:
 		ids.append_array(slot["ids"])
 	for id: int in ids:
-		var w: Node2D = _new_piece(PALETTE[_game.colors[id]], false)
+		var w: Node2D = _new_piece(_game.colors[id], false)
 		w.masked = _game.hidden[id] == 1 and not _revealed.has(id)
 		_wagons[id] = w
 	_slot_view.clear()
+	_slot_applied.clear()
 	for s: int in _game.slots.size():
 		_locos.append(null)
 		_spawn_loco(s)
+		_slot_applied.append(_view_seq)
 		_slot_view.append({"color": _game.slots[s]["color"], "size": _game.slots[s]["size"]})
 	_pending_view = _pending_snapshot()
+	_view_applied = _view_seq
 	_relayout(0.0)
+
+
+## Programme un changement d'affichage d'un quai (et, si `pending` est fourni, de la liste
+## des trains à venir) dans `delay` secondes. Indépendant des locomotives : en jeu rapide,
+## une locomotive peut repartir avant la fin de son animation d'arrivée.
+func _schedule_view(slot: int, delay: float, view: Dictionary, pending: Variant) -> void:
+	_view_seq += 1
+	var seq: int = _view_seq
+	var gen: int = _gen
+	get_tree().create_timer(delay).timeout.connect(func() -> void:
+		if gen != _gen:
+			return
+		if seq > _slot_applied[slot]:
+			_slot_applied[slot] = seq
+			_slot_view[slot] = view
+		if pending != null and seq > _view_applied:
+			_view_applied = seq
+			_pending_view = pending
+		queue_redraw())
 
 
 func _pending_snapshot() -> Array:
@@ -388,9 +417,10 @@ func _pending_snapshot() -> Array:
 	return list
 
 
-func _new_piece(color: Color, is_loco: bool) -> Node2D:
+func _new_piece(kind: int, is_loco: bool) -> Node2D:
 	var p: Node2D = Piece.new()
-	p.color = color
+	p.kind = kind
+	p.color = PALETTE[kind]
 	p.is_loco = is_loco
 	_pieces.add_child(p)
 	return p
@@ -400,24 +430,21 @@ func _new_piece(color: Color, is_loco: bool) -> Node2D:
 ## les cadres du quai et la liste des trains à venir ne changent qu'à son arrivée.
 func _spawn_loco(slot: int, delay: float = -1.0) -> void:
 	var color: int = _game.slots[slot]["color"]
-	var view: Dictionary = {"color": color, "size": _game.slots[slot]["size"]}
+	if delay >= 0.0:
+		_schedule_view(slot, delay + LOCO_IN_TIME,
+			{"color": color, "size": _game.slots[slot]["size"]}, _pending_snapshot())
 	if color == -1:
 		_locos[slot] = null
 		return
-	var loco: Node2D = _new_piece(PALETTE[color], true)
+	var loco: Node2D = _new_piece(color, true)
 	_locos[slot] = loco
 	if delay < 0.0:
 		loco.position = _loco_pos(slot)
 		return
-	var pending: Array = _pending_snapshot()
 	loco.position = Vector2(-200.0, _loco_pos(slot).y)
 	var tw: Tween = loco.create_tween()
 	tw.tween_interval(delay)
 	tw.tween_property(loco, "position", _loco_pos(slot), LOCO_IN_TIME).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.tween_callback(func() -> void:
-		_slot_view[slot] = view
-		_pending_view = pending
-		queue_redraw())
 
 
 func _wait(seconds: float) -> void:
@@ -494,7 +521,6 @@ func _relayout(duration: float, skip_id: int = -1) -> void:
 			var id: int = _game.tracks[t][k]
 			var w: Node2D = _wagons[id]
 			_move(w, _track_pos(t, k), duration)
-			w.modulate = Color(1, 1, 1, 1.0 if k == 0 else 0.5)
 			if k == 0 and w.masked:
 				_reveal(id, duration > 0.0)
 	for b: int in _game.buffer.size():
@@ -617,13 +643,10 @@ func _schedule_depart(step: Dictionary, delay: float) -> void:
 				Input.vibrate_handheld(40)
 				loco.add_child(_smoke()))
 		tw.tween_interval(0.12)
-		if n == loco:
-			# Le quai se vide de ses cadres au moment où le train s'ébranle.
-			tw.tween_callback(func() -> void:
-				_slot_view[slot] = {"color": -1, "size": 0}
-				queue_redraw())
 		tw.tween_property(n, "position:x", _size().x + 300.0, DEPART_TIME).as_relative().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
 		tw.tween_callback(n.queue_free)
+	# Le quai se vide de ses cadres au moment où le train s'ébranle.
+	_schedule_view(slot, delay + 0.12, {"color": -1, "size": 0}, null)
 	_spawn_loco(slot, delay + NEXT_TRAIN_DELAY - LOCO_IN_TIME)
 	queue_redraw()
 
@@ -634,7 +657,7 @@ func _finish() -> void:
 			_celebrate()
 		Game.LOST:
 			_sfx.play("lose")
-			_show_overlay("Gare bloquée !", "Annuler le dernier coup", 0, true)
+			_show_overlay("Gare bloquée !", "Annuler le dernier coup", 0, "Recommencer le niveau")
 
 
 ## Revient à l'état d'avant le dernier coup.
@@ -674,6 +697,7 @@ func _celebrate() -> void:
 	var key: String = str(_level_index)
 	_progress["stars"][key] = maxi(stars, int(_progress["stars"].get(key, 0)))
 	_progress["level"] = (_level_index + 1) % _levels.size()
+	_progress["reached"] = maxi(_reached(), mini(_level_index + 1, _levels.size() - 1))
 	_save_progress()
 	var confetti: CPUParticles2D = CPUParticles2D.new()
 	confetti.position = Vector2(_size().x / 2.0, _size().y * 0.25)
@@ -699,9 +723,9 @@ func _celebrate() -> void:
 	confetti.emitting = true
 	get_tree().create_timer(3.0).timeout.connect(fx.queue_free)
 	if _level_index == _levels.size() - 1:
-		_show_overlay("Bravo, tout est réussi !", "Rejouer depuis le début", stars, false)
+		_show_overlay("Terminus !", "Rejouer depuis le début", stars, "Voir la carte")
 	else:
-		_show_overlay("Niveau réussi !", "Niveau suivant", stars, false)
+		_show_overlay("Gare desservie !", "Gare suivante", stars, "Voir la carte")
 
 
 # --- Décor -------------------------------------------------------------------
@@ -754,7 +778,7 @@ func _draw() -> void:
 
 ## Options après « -- » : --level=N, --autoplay=K (K coups du solveur), --pace=S (secondes
 ## entre deux touches, 0 = rafale), --undo=N (N annulations ensuite), --wait=S (attente
-## avant capture), --picker=1 (ouvre le choix du niveau), --shot=chemin.png.
+## avant capture), --map=1 (ouvre la carte de la ligne), --shot=chemin.png.
 func _debug_hook() -> void:
 	var opts: Dictionary = {}
 	for a: String in OS.get_cmdline_user_args():
@@ -771,8 +795,8 @@ func _debug_hook() -> void:
 		_take(solution[k])
 		if pace > 0.0:
 			await _wait(pace)
-	if opts.has("picker"):
-		_open_picker()
+	if opts.has("map"):
+		_open_map()
 	for n: int in int(opts.get("undo", "0")):
 		await _wait(0.4)
 		_undo()

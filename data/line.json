@@ -1,0 +1,15 @@
+{
+	"regions": [
+		{"name": "La campagne", "first": 0, "map": "dfeac3", "game": "f3ead7", "decor": "tree"},
+		{"name": "La montagne", "first": 10, "map": "dde2ea", "game": "e9edf2", "decor": "peak"},
+		{"name": "Le port", "first": 20, "map": "cfe6ee", "game": "e4f0f2", "decor": "wave"}
+	],
+	"stations": [
+		"Valmont", "Les Aubiers", "Pré-Fleuri", "Moulins", "Sainte-Odile",
+		"Bellerive", "Champdoré", "La Ferté", "Vignolles", "Grand-Pré",
+		"Col-Blanc", "Pierrefeu", "Les Granges", "Haute-Combe", "Rochebrune",
+		"Val-d'Ardoise", "Les Cimes", "Pont-du-Diable", "Aiguebelle", "Mont-Clair",
+		"Les Salines", "Marée-Basse", "Cap-Rouge", "La Jetée", "Port-Louis",
+		"Les Docks", "Fort-Marin", "Baie-d'Or", "Le Phare", "Terminus-sur-Mer"
+	]
+}
