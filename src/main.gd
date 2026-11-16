@@ -419,7 +419,6 @@ func _pending_snapshot() -> Array:
 
 func _new_piece(kind: int, is_loco: bool) -> Node2D:
 	var p: Node2D = Piece.new()
-	p.kind = kind
 	p.color = PALETTE[kind]
 	p.is_loco = is_loco
 	_pieces.add_child(p)
