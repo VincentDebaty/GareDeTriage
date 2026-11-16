@@ -11,14 +11,16 @@ extends RefCounted
 ##
 ## Deux wagons attelés partent ensemble : le coup n'est possible que si chacun a une
 ## place (dans son train ou en attente).
-## Un wagon joker monte dans n'importe quel train à quai, en plus de ses wagons : il ne
-## prend pas de place et ne va jamais en attente.
+## Un wagon « +1 » (BONUS) ne va dans aucun train : quand on le prend, il devient une
+## place d'attente supplémentaire pour le reste du niveau.
 
 const PLAYING := 0
 const WON := 1
 const LOST := 2
-## Couleur réservée au wagon joker.
-const JOKER := 9
+## Couleur réservée au wagon « +1 place d'attente ».
+const BONUS := 9
+## Destination d'un wagon « +1 » dans le résultat de `take`.
+const TO_BONUS := -2
 
 ## Longueur par défaut d'un train quand le niveau ne la précise pas.
 var train_size: int = 3
@@ -33,8 +35,7 @@ var linked: PackedByteArray = PackedByteArray()
 ## Array[Array[int]] : l'index 0 de chaque voie est le wagon de tête.
 var tracks: Array = []
 var buffer: Array[int] = []
-## Array[Dictionary] {color, size, ids, extra} ; color = -1 pour un quai vide.
-## `ids` : wagons de la couleur du train ; `extra` : jokers accrochés en plus.
+## Array[Dictionary] {color, size, ids} ; color = -1 pour un quai vide.
 var slots: Array = []
 ## Couleurs des trains qui ne sont pas encore à quai.
 var pending: Array[int] = []
@@ -79,10 +80,9 @@ func load_level(level: Dictionary) -> void:
 
 func _next_train() -> Dictionary:
 	var ids: Array[int] = []
-	var extra: Array[int] = []
 	if pending.is_empty():
-		return {"color": -1, "size": 0, "ids": ids, "extra": extra}
-	return {"color": pending.pop_front(), "size": pending_sizes.pop_front(), "ids": ids, "extra": extra}
+		return {"color": -1, "size": 0, "ids": ids}
+	return {"color": pending.pop_front(), "size": pending_sizes.pop_front(), "ids": ids}
 
 
 ## Quai dont le train attend encore un wagon de cette couleur (-1 s'il n'y en a pas).
@@ -92,17 +92,6 @@ func _slot_for(color: int, added: Dictionary = {}) -> int:
 		if slots[s]["color"] == color and slots[s]["ids"].size() + int(added.get(s, 0)) < slots[s]["size"]:
 			return s
 	return -1
-
-
-## Quai où accrocher un joker : le train le plus rempli (-1 si aucun train à quai).
-func _joker_slot() -> int:
-	var best: int = -1
-	var most: int = -1
-	for s: int in slots.size():
-		if slots[s]["color"] != -1 and slots[s]["ids"].size() > most:
-			best = s
-			most = slots[s]["ids"].size()
-	return best
 
 
 ## Wagons qui partent ensemble si on prend la tête de cette voie.
@@ -116,24 +105,24 @@ func _group(track: int) -> Array[int]:
 	return ids
 
 
-## Destination de chaque wagon du groupe : un quai, ou -1 pour la voie d'attente.
-## Renvoie un tableau vide si le coup est impossible.
+## Destination de chaque wagon du groupe : un quai, -1 pour la voie d'attente, ou
+## TO_BONUS pour un wagon « +1 ». Renvoie un tableau vide si le coup est impossible.
 func _plan(track: int) -> Array[int]:
 	var plan: Array[int] = []
 	var added: Dictionary = {}
 	var waiting: int = buffer.size()
+	var places: int = buffer_size
 	for id: int in _group(track):
 		var slot: int = -1
-		if colors[id] == JOKER:
-			slot = _joker_slot()
-			if slot < 0:
-				plan.clear()
-				return plan
+		if colors[id] == BONUS:
+			# Toujours possible : il ne demande aucune place et en crée une.
+			slot = TO_BONUS
+			places += 1
 		else:
 			slot = _slot_for(colors[id], added)
 			if slot >= 0:
 				added[slot] = int(added.get(slot, 0)) + 1
-			elif waiting < buffer_size:
+			elif waiting < places:
 				waiting += 1
 			else:
 				plan.clear()
@@ -147,7 +136,8 @@ func can_take(track: int) -> bool:
 
 
 ## Prend le wagon de tête d'une voie (et celui qui lui est attelé). Renvoie {} si le coup
-## est impossible, sinon {moves: [{id, slot}, ...]} avec slot = -1 pour la voie d'attente.
+## est impossible, sinon {moves: [{id, slot}, ...]} avec slot = -1 pour la voie d'attente
+## et TO_BONUS pour un wagon « +1 » (qui disparaît en ajoutant une place d'attente).
 func take(track: int) -> Dictionary:
 	var plan: Array[int] = _plan(track)
 	if plan.is_empty():
@@ -155,8 +145,8 @@ func take(track: int) -> Dictionary:
 	var done: Array = []
 	for slot: int in plan:
 		var id: int = tracks[track].pop_front()
-		if colors[id] == JOKER:
-			slots[slot]["extra"].append(id)
+		if slot == TO_BONUS:
+			buffer_size += 1
 		elif slot >= 0:
 			slots[slot]["ids"].append(id)
 		else:
@@ -168,13 +158,12 @@ func take(track: int) -> Dictionary:
 
 
 ## Applique un seul mouvement automatique et le décrit, ou renvoie {} s'il n'y en a pas.
-## - {type: "depart", slot, ids} : un train complet part (jokers compris), le suivant
-##   prend le quai ;
+## - {type: "depart", slot, ids} : un train complet part, le suivant prend le quai ;
 ## - {type: "load", id, slot} : un wagon en attente rejoint son train.
 func settle_step() -> Dictionary:
 	for s: int in slots.size():
 		if slots[s]["color"] != -1 and slots[s]["ids"].size() >= slots[s]["size"]:
-			var gone: Array = slots[s]["ids"] + slots[s]["extra"]
+			var gone: Array = slots[s]["ids"]
 			slots[s] = _next_train()
 			return {"type": "depart", "slot": s, "ids": gone}
 	for b: int in buffer.size():
@@ -194,12 +183,12 @@ func settle() -> void:
 
 ## État de la partie. À appeler une fois les mouvements automatiques épuisés.
 ## Gagné quand tous les trains sont partis et qu'il ne reste aucun wagon de couleur ;
-## un joker resté sur une voie est simplement inutilisé.
+## un wagon « +1 » resté sur une voie est simplement inutilisé.
 func status() -> int:
 	var done: bool = buffer.is_empty()
 	for t: Array in tracks:
 		for id: int in t:
-			done = done and colors[id] == JOKER
+			done = done and colors[id] == BONUS
 	for sl: Dictionary in slots:
 		done = done and sl["color"] == -1
 	if done:
@@ -216,7 +205,7 @@ func wagons_in_play() -> int:
 	for t: Array in tracks:
 		n += t.size()
 	for sl: Dictionary in slots:
-		n += sl["ids"].size() + sl["extra"].size()
+		n += sl["ids"].size()
 	return n
 
 
@@ -239,7 +228,7 @@ func clone() -> RefCounted:
 
 ## Clé d'état pour le solveur.
 func key() -> String:
-	var k: String = ""
+	var k: String = str(buffer_size) + "/"
 	for t: Array in tracks:
 		k += str(t.size()) + ","
 	var waiting: PackedInt32Array = PackedInt32Array()

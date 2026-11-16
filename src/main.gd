@@ -32,7 +32,7 @@ const LOCO_IN_TIME := 0.35
 const NEXT_TRAIN_DELAY := 0.12 + DEPART_TIME * 0.7 + LOCO_IN_TIME
 const SAVE_PATH := "user://progress.json"
 ## À incrémenter quand le jeu de niveaux change : la progression repart alors de zéro.
-const SAVE_VERSION := 3
+const SAVE_VERSION := 4
 
 var _levels: Array = []
 var _level_index: int = 0
@@ -48,6 +48,9 @@ var _revealed: Dictionary = {}
 ## déjà à jour au moment de la touche, l'affichage change quand le train arrive vraiment.
 var _slot_view: Array[Dictionary] = []
 var _pending_view: Array = []
+## Nombre de places d'attente dessinées : une place ajoutée par un wagon « +1 »
+## n'apparaît qu'à l'arrivée de ce wagon.
+var _buffer_view: int = 0
 ## Numéros d'ordre des mises à jour de ces vues : en jouant très vite, deux animations
 ## peuvent se terminer dans le désordre ; on n'applique jamais un état plus ancien que
 ## celui déjà affiché (par quai, et pour la liste des trains à venir).
@@ -376,7 +379,6 @@ func _rebuild() -> void:
 	ids.append_array(_game.buffer)
 	for slot: Dictionary in _game.slots:
 		ids.append_array(slot["ids"])
-		ids.append_array(slot["extra"])
 	for id: int in ids:
 		var w: Node2D = _new_piece(_game.colors[id], false)
 		w.masked = _game.hidden[id] == 1 and not _revealed.has(id)
@@ -389,6 +391,7 @@ func _rebuild() -> void:
 		_slot_applied.append(_view_seq)
 		_slot_view.append({"color": _game.slots[s]["color"], "size": _game.slots[s]["size"]})
 	_pending_view = _pending_snapshot()
+	_buffer_view = _game.buffer_size
 	_view_applied = _view_seq
 	_relayout(0.0)
 
@@ -422,7 +425,7 @@ func _pending_snapshot() -> Array:
 func _new_piece(kind: int, is_loco: bool) -> Node2D:
 	var p: Node2D = Piece.new()
 	p.color = PALETTE[kind] if kind < PALETTE.size() else Color.WHITE
-	p.is_joker = kind == Game.JOKER
+	p.is_bonus = kind == Game.BONUS
 	p.is_loco = is_loco
 	_pieces.add_child(p)
 	return p
@@ -536,9 +539,6 @@ func _relayout(duration: float, skip: Array = []) -> void:
 			var ids: Array = _game.slots[s]["ids"]
 			for k: int in ids.size():
 				_move(_wagons[ids[k]], _slot_pos(s, k), 0.0)
-			var extra: Array = _game.slots[s]["extra"]
-			for k: int in extra.size():
-				_move(_wagons[extra[k]], _slot_pos(s, int(_game.slots[s]["size"]) + k), 0.0)
 	queue_redraw()
 
 
@@ -594,14 +594,14 @@ func _take(track: int) -> void:
 		_pop(w)
 		# Deux wagons attelés partent l'un derrière l'autre.
 		var delay: float = PAIR_GAP * i
-		if slot >= 0:
+		if slot == Game.TO_BONUS:
+			# Le wagon « +1 » roule au bout de la voie d'attente et y devient une place.
 			boarded = true
-			var train: Dictionary = _game.slots[slot]
-			var k: int = train["ids"].find(id)
-			if k < 0:
-				# Joker : accroché après les places du train.
-				k = int(train["size"]) + train["extra"].find(id)
-			_roll(w, _slot_pos(slot, k), delay, Callable(), _couple.bind(w))
+			_wagons.erase(id)
+			_roll(w, _buffer_pos(_game.buffer_size - 1), delay, Callable(), _become_place.bind(w, _game.buffer_size))
+		elif slot >= 0:
+			boarded = true
+			_roll(w, _slot_pos(slot, _game.slots[slot]["ids"].find(id)), delay, Callable(), _couple.bind(w))
 		else:
 			_roll(w, _buffer_pos(_game.buffer.find(id)), delay, Callable(), Callable())
 	_sfx.play("pop" if boarded else "wait")
@@ -631,6 +631,18 @@ func _take(track: int) -> void:
 		get_tree().create_timer(maxf(next_start, last_arrival) + 0.5).timeout.connect(func() -> void:
 			if gen == _gen:
 				_finish())
+
+
+## Arrivée d'un wagon « +1 » : il disparaît et laisse une place d'attente de plus.
+func _become_place(node: Node2D, places: int) -> void:
+	_buffer_view = maxi(_buffer_view, places)
+	_sfx.play("star")
+	Input.vibrate_handheld(25)
+	queue_redraw()
+	var tw: Tween = node.create_tween()
+	tw.tween_property(node, "scale", Vector2(1.4, 1.4), 0.12)
+	tw.parallel().tween_property(node, "modulate:a", 0.0, 0.12)
+	tw.tween_callback(node.queue_free)
 
 
 ## Un wagon en attente rejoint son train après `delay` secondes.
@@ -774,7 +786,7 @@ func _draw() -> void:
 	var first: Vector2 = _buffer_pos(0)
 	var last: Vector2 = _buffer_pos(_game.buffer_size - 1)
 	_track(first - Vector2(60.0, 0.0), last + Vector2(60.0, 0.0))
-	for b: int in _game.buffer_size:
+	for b: int in mini(_buffer_view, _game.buffer_size):
 		_place(_buffer_pos(b), PALETTE[0] if tight else INK)
 	# Quais de départ : emplacements à remplir derrière chaque locomotive.
 	for s: int in _game.slots.size():

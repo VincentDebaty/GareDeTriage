@@ -14,7 +14,7 @@ func _init() -> void:
 	_test_buffer_is_capped_and_blocks()
 	_test_train_sizes_and_clone()
 	_test_coupled_wagons()
-	_test_joker()
+	_test_bonus_place()
 	_test_levels_are_consistent_and_solvable()
 	_test_solution_replay_conserves_wagons()
 	print("%d vérifications réussies, %d en échec" % [_passed, _failed])
@@ -116,28 +116,28 @@ func _test_coupled_wagons() -> void:
 	_check(ev["moves"][0]["slot"] == 0 and ev["moves"][1]["slot"] == -1, "le second de même couleur attend si le train est plein")
 
 
-func _test_joker() -> void:
-	var j: int = Game.JOKER
+func _test_bonus_place() -> void:
+	var b: int = Game.BONUS
+	# Train rouge (0) à quai, puis bleu (1). Une seule place d'attente au départ.
 	var g: Game = Game.new()
-	g.load_level({"tracks": [[j, 1, 0, 0, 0, 1, 1, j]], "trains": [0, 1], "buffer": 1, "slots": 1})
+	g.load_level({"tracks": [[1, b, 1, 0, 0, 0, 1, b]], "trains": [0, 1], "buffer": 1, "slots": 1})
+	g.take(0)
+	_check(g.buffer.size() == 1 and g.buffer_size == 1, "un bleu en attente, attente pleine")
+	var total: int = g.wagons_in_play()
 	var ev: Dictionary = g.take(0)
-	_check(ev["moves"][0]["slot"] == 0, "le joker monte dans le train à quai")
-	_check(g.buffer.is_empty() and g.slots[0]["ids"].is_empty() and g.slots[0]["extra"].size() == 1,
-		"le joker ne prend ni place d'attente ni place dans le train")
+	_check(ev["moves"][0]["slot"] == Game.TO_BONUS, "le wagon +1 est pris même quand l'attente est pleine")
+	_check(g.buffer_size == 2 and g.buffer.size() == 1, "il ajoute une place d'attente sans en occuper")
+	_check(g.wagons_in_play() == total - 1, "le wagon +1 quitte le jeu")
+	_check(g.can_take(0), "le second bleu a maintenant une place")
 	g.take(0)
 	for i: int in 3:
 		g.take(0)
-	var step: Dictionary = g.settle_step()
-	_check(step["type"] == "depart" and step["ids"].size() == 4, "le joker part avec le train (3 wagons + lui)")
 	g.settle()
 	g.take(0)
-	g.take(0)
 	g.settle()
-	_check(g.tracks[0].size() == 1 and g.status() == Game.WON, "gagné même si un joker reste inutilisé")
-	# Sans train à quai, le joker ne peut pas partir.
-	var alone: Game = Game.new()
-	alone.load_level({"tracks": [[j]], "trains": [], "buffer": 2, "slots": 1})
-	_check(not alone.can_take(0), "pas de train à quai : le joker reste")
+	_check(g.tracks[0].size() == 1 and g.status() == Game.WON, "gagné même si un wagon +1 reste inutilisé")
+	var saved: Game = g.clone() as Game
+	_check(saved.buffer_size == 2, "la place ajoutée est conservée par la copie (Annuler)")
 
 
 func _test_levels_are_consistent_and_solvable() -> void:
@@ -149,7 +149,7 @@ func _test_levels_are_consistent_and_solvable() -> void:
 		var wagons: Dictionary = {}
 		for track: Variant in level["tracks"]:
 			for c: Variant in track:
-				if int(c) != Game.JOKER:
+				if int(c) != Game.BONUS:
 					wagons[int(c)] = int(wagons.get(int(c), 0)) + 1
 		var wanted: Dictionary = {}
 		for i: int in level["trains"].size():
@@ -160,8 +160,11 @@ func _test_levels_are_consistent_and_solvable() -> void:
 		var g: Game = Game.new()
 		g.load_level(level)
 		_check(Solver.solve(g)["solvable"], "niveau %d : faisable" % (n + 1))
+		var bonus: int = 0
+		for track: Variant in level["tracks"]:
+			bonus += track.count(float(Game.BONUS)) + track.count(Game.BONUS)
 		var tight: Dictionary = level.duplicate()
-		tight["buffer"] = int(level["par"])
+		tight["buffer"] = int(level["par"]) - bonus
 		g = Game.new()
 		g.load_level(tight)
 		_check(Solver.solve(g)["solvable"], "niveau %d : trois étoiles atteignables" % (n + 1))
@@ -173,6 +176,8 @@ func _test_solution_replay_conserves_wagons() -> void:
 		g.load_level(level)
 		var total: int = g.wagons_in_play()
 		var departed: int = 0
+		# Wagons « +1 » consommés : ils quittent le jeu sans partir en train.
+		var consumed: int = 0
 		var solution: Array = Solver.solve(g)["moves"]
 		var ok: bool = true
 		var step: int = 0
@@ -181,11 +186,16 @@ func _test_solution_replay_conserves_wagons() -> void:
 			if ev.is_empty():
 				if step >= solution.size():
 					break
-				ok = ok and not g.take(solution[step]).is_empty()
+				var taken: Dictionary = g.take(solution[step])
+				ok = ok and not taken.is_empty()
+				for m: Dictionary in taken.get("moves", []):
+					if m["slot"] == Game.TO_BONUS:
+						consumed += 1
 				step += 1
 			elif ev["type"] == "depart":
 				departed += ev["ids"].size()
-			ok = ok and g.wagons_in_play() + departed == total
+			ok = ok and g.wagons_in_play() + departed + consumed == total
 			ok = ok and g.buffer.size() <= g.buffer_size
 		_check(ok, "bilan des wagons et capacité d'attente respectés pendant la solution")
-		_check(g.status() == Game.WON and departed == total, "la solution du solveur gagne")
+		# Un wagon « +1 » inutilisé peut rester sur une voie à la fin.
+		_check(g.status() == Game.WON and departed + consumed + g.wagons_in_play() == total, "la solution du solveur gagne")

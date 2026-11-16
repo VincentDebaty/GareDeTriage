@@ -6,8 +6,8 @@ const MYSTERY := Color("3d4055")
 
 var color: Color = Color.WHITE
 var is_loco: bool = false
-## Wagon joker : blanc avec une étoile.
-var is_joker: bool = false
+## Wagon « +1 » : blanc, il devient une place d'attente supplémentaire.
+var is_bonus: bool = false
 ## Wagon attelé à celui qui le précède (dessiné juste en dessous sur la voie).
 var coupled: bool = false:
 	set(value):
@@ -31,11 +31,9 @@ func _draw() -> void:
 		# Roues, pour que le wagon se lise comme un wagon.
 		draw_circle(Vector2(-18.0, SIZE / 2.0 - 2.0), 7.0, Color("2b2d42"))
 		draw_circle(Vector2(18.0, SIZE / 2.0 - 2.0), 7.0, Color("2b2d42"))
-		if is_joker:
-			var star: PackedVector2Array = PackedVector2Array()
-			for k: int in 10:
-				star.append(Vector2(0.0, -2.0) + Vector2.from_angle(-PI / 2.0 + k * PI / 5.0) * (20.0 if k % 2 == 0 else 9.0))
-			draw_colored_polygon(star, Color("f2b705"))
+		if is_bonus:
+			draw_string(ThemeDB.fallback_font, Vector2(-SIZE / 2.0, 12.0), "+1",
+				HORIZONTAL_ALIGNMENT_CENTER, SIZE, 34, Color("2b2d42"))
 		if coupled:
 			# Attelage : une plaque sombre à cheval sur les deux wagons.
 			var plate: StyleBoxFlat = StyleBoxFlat.new()
