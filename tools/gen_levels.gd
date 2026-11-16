@@ -12,18 +12,21 @@ const Solver := preload("res://src/triage_solver.gd")
 ## plus facile, pour alterner tension et respiration.
 ## `sizes` : longueurs de train possibles ; `hidden` : part de wagons mystère (à 0 pour
 ## l'instant : jugés trop perturbants à l'essai, le mécanisme reste disponible) ;
+## `links` : nombre de paires de wagons attelés ; `jokers` : nombre de wagons joker ;
 ## `hint` : message affiché au premier niveau du palier.
 const TIERS: Array[Dictionary] = [
-	{"count": 1, "colors": 2, "trains_per_color": 1, "tracks": 2, "buffer": 4, "sizes": [3], "hidden": 0.0, "from": 0.90, "to": 0.90,
+	{"count": 1, "colors": 2, "trains_per_color": 1, "tracks": 2, "buffer": 4, "sizes": [3], "hidden": 0.0, "links": 0, "jokers": 0, "from": 0.90, "to": 0.90,
 		"hint": "Touchez une voie pour envoyer son wagon du bas vers son train. S'il n'est pas attendu, il patiente sur la voie d'attente."},
-	{"count": 2, "colors": 3, "trains_per_color": 1, "tracks": 3, "buffer": 2, "sizes": [3], "hidden": 0.0, "from": 0.65, "to": 0.55},
-	{"count": 3, "colors": 3, "trains_per_color": 2, "tracks": 3, "buffer": 4, "sizes": [2, 3, 4], "hidden": 0.0, "from": 0.45, "to": 0.30,
+	{"count": 2, "colors": 3, "trains_per_color": 1, "tracks": 3, "buffer": 2, "sizes": [3], "hidden": 0.0, "links": 0, "jokers": 0, "from": 0.65, "to": 0.55},
+	{"count": 3, "colors": 3, "trains_per_color": 2, "tracks": 3, "buffer": 4, "sizes": [2, 3, 4], "hidden": 0.0, "links": 0, "jokers": 0, "from": 0.45, "to": 0.30,
 		"hint": "Nouveau : les trains n'ont pas tous la même longueur."},
-	{"count": 4, "colors": 4, "trains_per_color": 2, "tracks": 4, "buffer": 4, "sizes": [3], "hidden": 0.0, "from": 0.30, "to": 0.15},
-	{"count": 5, "colors": 4, "trains_per_color": 2, "tracks": 4, "buffer": 3, "sizes": [2, 3, 4], "hidden": 0.0, "from": 0.20, "to": 0.08},
-	{"count": 5, "colors": 5, "trains_per_color": 2, "tracks": 4, "buffer": 5, "sizes": [2, 3, 4], "hidden": 0.0, "from": 0.14, "to": 0.06},
-	{"count": 5, "colors": 5, "trains_per_color": 2, "tracks": 4, "buffer": 4, "sizes": [2, 3, 4], "hidden": 0.0, "from": 0.08, "to": 0.03},
-	{"count": 5, "colors": 6, "trains_per_color": 2, "tracks": 5, "buffer": 5, "sizes": [2, 3, 4], "hidden": 0.0, "from": 0.07, "to": 0.02},
+	{"count": 4, "colors": 4, "trains_per_color": 2, "tracks": 4, "buffer": 4, "sizes": [2, 3, 4], "hidden": 0.0, "links": 2, "jokers": 0, "from": 0.30, "to": 0.15,
+		"hint": "Nouveau : deux wagons attelés partent ensemble. Il faut une place pour chacun."},
+	{"count": 5, "colors": 4, "trains_per_color": 2, "tracks": 4, "buffer": 3, "sizes": [2, 3, 4], "hidden": 0.0, "links": 2, "jokers": 1, "from": 0.20, "to": 0.08,
+		"hint": "Nouveau : le wagon blanc à étoile monte dans n'importe quel train, sans prendre de place."},
+	{"count": 5, "colors": 5, "trains_per_color": 2, "tracks": 4, "buffer": 5, "sizes": [2, 3, 4], "hidden": 0.0, "links": 3, "jokers": 1, "from": 0.14, "to": 0.06},
+	{"count": 5, "colors": 5, "trains_per_color": 2, "tracks": 4, "buffer": 4, "sizes": [2, 3, 4], "hidden": 0.0, "links": 3, "jokers": 2, "from": 0.08, "to": 0.03},
+	{"count": 5, "colors": 6, "trains_per_color": 2, "tracks": 5, "buffer": 5, "sizes": [2, 3, 4], "hidden": 0.0, "links": 4, "jokers": 2, "from": 0.07, "to": 0.02},
 ]
 ## Nombre maximal de wagons par voie (hauteur disponible à l'écran).
 const TRACK_ROWS := 8
@@ -116,6 +119,8 @@ func _random_level(spec: Dictionary, rng: RandomNumberGenerator) -> Dictionary:
 				train_sizes.append(size)
 				for w: int in size:
 					wagons.append(color)
+		for j: int in int(spec["jokers"]):
+			wagons.append(Game.JOKER)
 		if wagons.size() <= track_count * TRACK_ROWS:
 			break
 	_shuffle(wagons, rng)
@@ -140,9 +145,33 @@ func _random_level(spec: Dictionary, rng: RandomNumberGenerator) -> Dictionary:
 		var masked: bool = not track.is_empty() and rng.randf() < float(spec["hidden"])
 		track.append(wagons[i])
 		hidden[i % track_count].append(1 if masked else 0)
+	# Paires de wagons attelés : deux wagons voisins d'une même voie, jamais un joker,
+	# jamais deux paires qui se touchent.
+	var links: Array = []
+	for track: Array in tracks:
+		var row: Array = []
+		row.resize(track.size())
+		row.fill(0)
+		links.append(row)
+	var placed: int = 0
+	for attempt: int in 200:
+		if placed >= int(spec["links"]):
+			break
+		var t: int = rng.randi_range(0, track_count - 1)
+		var track: Array = tracks[t]
+		if track.size() < 2:
+			continue
+		var k: int = rng.randi_range(0, track.size() - 2)
+		if track[k] == Game.JOKER or track[k + 1] == Game.JOKER:
+			continue
+		if links[t][k] == 1 or links[t][k + 1] == 1 or (k > 0 and links[t][k - 1] == 1):
+			continue
+		links[t][k] = 1
+		placed += 1
 	return {
 		"tracks": tracks,
 		"hidden": hidden,
+		"links": links,
 		"trains": trains,
 		"train_sizes": lengths,
 		"buffer": spec["buffer"],

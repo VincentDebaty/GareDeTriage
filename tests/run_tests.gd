@@ -13,6 +13,8 @@ func _init() -> void:
 	_test_unexpected_wagon_waits_then_boards()
 	_test_buffer_is_capped_and_blocks()
 	_test_train_sizes_and_clone()
+	_test_coupled_wagons()
+	_test_joker()
 	_test_levels_are_consistent_and_solvable()
 	_test_solution_replay_conserves_wagons()
 	print("%d vérifications réussies, %d en échec" % [_passed, _failed])
@@ -40,7 +42,7 @@ func _levels() -> Array:
 func _test_expected_wagon_boards_train() -> void:
 	var g: Game = _game([[0, 0, 0]], [0], 0)
 	for i: int in 3:
-		_check(g.take(0)["slot"] == 0, "wagon attendu : monte dans le train")
+		_check(g.take(0)["moves"][0]["slot"] == 0, "wagon attendu : monte dans le train")
 	g.settle()
 	_check(g.status() == Game.WON, "train complet parti : gagné")
 	_check(g.peak_buffer == 0, "aucune attente utilisée")
@@ -49,7 +51,7 @@ func _test_expected_wagon_boards_train() -> void:
 func _test_unexpected_wagon_waits_then_boards() -> void:
 	# Train rouge (0) à quai, puis bleu (1). Le bleu de tête doit patienter.
 	var g: Game = _game([[1, 0, 0, 0, 1, 1]], [0, 1], 2)
-	_check(g.take(0)["slot"] == -1, "wagon non attendu : voie d'attente")
+	_check(g.take(0)["moves"][0]["slot"] == -1, "wagon non attendu : voie d'attente")
 	_check(g.buffer.size() == 1, "un wagon en attente")
 	for i: int in 3:
 		g.take(0)
@@ -91,6 +93,53 @@ func _test_train_sizes_and_clone() -> void:
 	_check(saved.tracks[0].size() == 5 and saved.slots[0]["ids"].size() == 1, "la copie (Annuler) n'est pas modifiée par la suite")
 
 
+func _test_coupled_wagons() -> void:
+	# Train rouge (0) à quai, puis bleu (1). Rouge et bleu attelés en tête de voie.
+	var g: Game = Game.new()
+	g.load_level({"tracks": [[0, 1, 0, 0, 1, 1]], "links": [[1, 0, 0, 0, 0, 0]],
+		"trains": [0, 1], "buffer": 1, "slots": 1})
+	var ev: Dictionary = g.take(0)
+	_check(ev["moves"].size() == 2, "deux wagons attelés partent en un seul coup")
+	_check(ev["moves"][0]["slot"] == 0 and ev["moves"][1]["slot"] == -1, "chacun va à sa place : train, attente")
+	_check(g.moves == 1 and g.tracks[0].size() == 4, "un seul coup compté, deux wagons retirés")
+	# Sans place d'attente pour le second, le coup est refusé en entier.
+	var blocked: Game = Game.new()
+	blocked.load_level({"tracks": [[0, 1, 0, 0, 1, 1]], "links": [[1, 0, 0, 0, 0, 0]],
+		"trains": [0, 1], "buffer": 0, "slots": 1})
+	_check(not blocked.can_take(0) and blocked.take(0).is_empty(), "pas de place pour les deux : coup refusé")
+	_check(blocked.tracks[0].size() == 6, "rien n'a bougé après un coup refusé")
+	# Deux wagons attelés de la même couleur ne dépassent pas la longueur du train.
+	var same: Game = Game.new()
+	same.load_level({"tracks": [[0, 0]], "links": [[1, 0]], "trains": [0], "train_sizes": [1],
+		"buffer": 1, "slots": 1})
+	ev = same.take(0)
+	_check(ev["moves"][0]["slot"] == 0 and ev["moves"][1]["slot"] == -1, "le second de même couleur attend si le train est plein")
+
+
+func _test_joker() -> void:
+	var j: int = Game.JOKER
+	var g: Game = Game.new()
+	g.load_level({"tracks": [[j, 1, 0, 0, 0, 1, 1, j]], "trains": [0, 1], "buffer": 1, "slots": 1})
+	var ev: Dictionary = g.take(0)
+	_check(ev["moves"][0]["slot"] == 0, "le joker monte dans le train à quai")
+	_check(g.buffer.is_empty() and g.slots[0]["ids"].is_empty() and g.slots[0]["extra"].size() == 1,
+		"le joker ne prend ni place d'attente ni place dans le train")
+	g.take(0)
+	for i: int in 3:
+		g.take(0)
+	var step: Dictionary = g.settle_step()
+	_check(step["type"] == "depart" and step["ids"].size() == 4, "le joker part avec le train (3 wagons + lui)")
+	g.settle()
+	g.take(0)
+	g.take(0)
+	g.settle()
+	_check(g.tracks[0].size() == 1 and g.status() == Game.WON, "gagné même si un joker reste inutilisé")
+	# Sans train à quai, le joker ne peut pas partir.
+	var alone: Game = Game.new()
+	alone.load_level({"tracks": [[j]], "trains": [], "buffer": 2, "slots": 1})
+	_check(not alone.can_take(0), "pas de train à quai : le joker reste")
+
+
 func _test_levels_are_consistent_and_solvable() -> void:
 	var levels: Array = _levels()
 	_check(levels.size() >= 30, "au moins trente niveaux")
@@ -100,7 +149,8 @@ func _test_levels_are_consistent_and_solvable() -> void:
 		var wagons: Dictionary = {}
 		for track: Variant in level["tracks"]:
 			for c: Variant in track:
-				wagons[int(c)] = int(wagons.get(int(c), 0)) + 1
+				if int(c) != Game.JOKER:
+					wagons[int(c)] = int(wagons.get(int(c), 0)) + 1
 		var wanted: Dictionary = {}
 		for i: int in level["trains"].size():
 			var c: int = int(level["trains"][i])

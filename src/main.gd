@@ -25,13 +25,14 @@ const GOLD := Color("f2b705")
 const MOVE_TIME := 0.16
 const ROLL_TIME := 0.26
 const CASCADE_GAP := 0.14
+const PAIR_GAP := 0.07
 const DEPART_TIME := 0.6
 const LOCO_IN_TIME := 0.35
 ## Délai entre le début d'un départ et l'arrivée à quai de la locomotive suivante.
 const NEXT_TRAIN_DELAY := 0.12 + DEPART_TIME * 0.7 + LOCO_IN_TIME
 const SAVE_PATH := "user://progress.json"
 ## À incrémenter quand le jeu de niveaux change : la progression repart alors de zéro.
-const SAVE_VERSION := 2
+const SAVE_VERSION := 3
 
 var _levels: Array = []
 var _level_index: int = 0
@@ -375,6 +376,7 @@ func _rebuild() -> void:
 	ids.append_array(_game.buffer)
 	for slot: Dictionary in _game.slots:
 		ids.append_array(slot["ids"])
+		ids.append_array(slot["extra"])
 	for id: int in ids:
 		var w: Node2D = _new_piece(_game.colors[id], false)
 		w.masked = _game.hidden[id] == 1 and not _revealed.has(id)
@@ -419,7 +421,8 @@ func _pending_snapshot() -> Array:
 
 func _new_piece(kind: int, is_loco: bool) -> Node2D:
 	var p: Node2D = Piece.new()
-	p.color = PALETTE[kind]
+	p.color = PALETTE[kind] if kind < PALETTE.size() else Color.WHITE
+	p.is_joker = kind == Game.JOKER
 	p.is_loco = is_loco
 	_pieces.add_child(p)
 	return p
@@ -513,17 +516,18 @@ func _shake(node: Node2D) -> void:
 
 
 ## Place les wagons des voies et de l'attente là où la règle dit qu'ils se trouvent.
-## `skip_id` : wagon dont le déplacement est déjà animé par ailleurs.
-func _relayout(duration: float, skip_id: int = -1) -> void:
+## `skip` : wagons dont le déplacement est déjà animé par ailleurs.
+func _relayout(duration: float, skip: Array = []) -> void:
 	for t: int in _game.tracks.size():
 		for k: int in _game.tracks[t].size():
 			var id: int = _game.tracks[t][k]
 			var w: Node2D = _wagons[id]
 			_move(w, _track_pos(t, k), duration)
+			w.coupled = k > 0 and _game.linked[_game.tracks[t][k - 1]] == 1
 			if k == 0 and w.masked:
 				_reveal(id, duration > 0.0)
 	for b: int in _game.buffer.size():
-		if _game.buffer[b] != skip_id:
+		if not skip.has(_game.buffer[b]):
 			_move(_wagons[_game.buffer[b]], _buffer_pos(b), duration)
 	# Les wagons à quai sont placés par leurs propres animations ; on ne les
 	# repositionne ici que pour un placement immédiat (changement de taille d'écran).
@@ -532,6 +536,9 @@ func _relayout(duration: float, skip_id: int = -1) -> void:
 			var ids: Array = _game.slots[s]["ids"]
 			for k: int in ids.size():
 				_move(_wagons[ids[k]], _slot_pos(s, k), 0.0)
+			var extra: Array = _game.slots[s]["extra"]
+			for k: int in extra.size():
+				_move(_wagons[extra[k]], _slot_pos(s, int(_game.slots[s]["size"]) + k), 0.0)
 	queue_redraw()
 
 
@@ -565,8 +572,7 @@ func _unhandled_input(event: InputEvent) -> void:
 func _take(track: int) -> void:
 	if _game.status() != Game.PLAYING or _game.tracks[track].is_empty():
 		return
-	var id: int = _game.tracks[track][0]
-	var head: Node2D = _wagons[id]
+	var head: Node2D = _wagons[_game.tracks[track][0]]
 	var before: Game = _game.clone() as Game
 	var ev: Dictionary = _game.take(track)
 	if ev.is_empty():
@@ -576,20 +582,33 @@ func _take(track: int) -> void:
 	_history.append(before)
 	# La règle est appliquée tout de suite, jusqu'au bout des mouvements automatiques.
 	# Les animations sont seulement programmées : elles ne bloquent jamais la saisie.
-	head.modulate = Color.WHITE
-	_pop(head)
 	Input.vibrate_handheld(15)
-	var slot: int = ev["slot"]
-	if slot >= 0:
-		_sfx.play("pop")
-		_roll(head, _slot_pos(slot, _game.slots[slot]["ids"].size() - 1), 0.0, Callable(), _couple.bind(head))
-	else:
-		_sfx.play("wait")
-		_roll(head, _buffer_pos(_game.buffer.size() - 1), 0.0, Callable(), Callable())
+	var taken: Array = []
+	var boarded: bool = false
+	for i: int in ev["moves"].size():
+		var id: int = ev["moves"][i]["id"]
+		var slot: int = ev["moves"][i]["slot"]
+		var w: Node2D = _wagons[id]
+		taken.append(id)
+		w.coupled = false
+		_pop(w)
+		# Deux wagons attelés partent l'un derrière l'autre.
+		var delay: float = PAIR_GAP * i
+		if slot >= 0:
+			boarded = true
+			var train: Dictionary = _game.slots[slot]
+			var k: int = train["ids"].find(id)
+			if k < 0:
+				# Joker : accroché après les places du train.
+				k = int(train["size"]) + train["extra"].find(id)
+			_roll(w, _slot_pos(slot, k), delay, Callable(), _couple.bind(w))
+		else:
+			_roll(w, _buffer_pos(_game.buffer.find(id)), delay, Callable(), Callable())
+	_sfx.play("pop" if boarded else "wait")
 	# Enchaînement : les wagons en attente montent en cascade, un train complet part
 	# dès que son dernier wagon est attelé.
 	var next_start: float = CASCADE_GAP
-	var last_arrival: float = ROLL_TIME
+	var last_arrival: float = ROLL_TIME + PAIR_GAP * (taken.size() - 1)
 	var chain: int = 0
 	while true:
 		var step: Dictionary = _game.settle_step()
@@ -606,7 +625,7 @@ func _take(track: int) -> void:
 			# Les wagons en attente pour le train suivant arrivent en même temps que lui.
 			next_start = start + NEXT_TRAIN_DELAY - ROLL_TIME
 			last_arrival = start + NEXT_TRAIN_DELAY
-	_relayout(MOVE_TIME, id)
+	_relayout(MOVE_TIME, taken)
 	if _game.status() != Game.PLAYING:
 		var gen: int = _gen
 		get_tree().create_timer(maxf(next_start, last_arrival) + 0.5).timeout.connect(func() -> void:
