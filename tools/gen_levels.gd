@@ -10,16 +10,23 @@ const Solver := preload("res://src/triage_solver.gd")
 ## Valeurs d'essai, à ajuster librement. Chaque palier produit `count` niveaux dont la
 ## cible de réussite au hasard descend de `from` à `to` ; un nouveau palier repart un peu
 ## plus facile, pour alterner tension et respiration.
+## `sizes` : longueurs de train possibles ; `hidden` : part de wagons mystère (à 0 pour
+## l'instant : jugés trop perturbants à l'essai, le mécanisme reste disponible) ;
+## `hint` : message affiché au premier niveau du palier.
 const TIERS: Array[Dictionary] = [
-	{"count": 1, "colors": 2, "trains_per_color": 1, "tracks": 2, "buffer": 4, "from": 0.90, "to": 0.90},
-	{"count": 2, "colors": 3, "trains_per_color": 1, "tracks": 3, "buffer": 2, "from": 0.65, "to": 0.55},
-	{"count": 3, "colors": 3, "trains_per_color": 2, "tracks": 3, "buffer": 4, "from": 0.45, "to": 0.30},
-	{"count": 4, "colors": 4, "trains_per_color": 2, "tracks": 4, "buffer": 4, "from": 0.30, "to": 0.15},
-	{"count": 5, "colors": 4, "trains_per_color": 2, "tracks": 4, "buffer": 3, "from": 0.20, "to": 0.08},
-	{"count": 5, "colors": 5, "trains_per_color": 2, "tracks": 4, "buffer": 5, "from": 0.14, "to": 0.06},
-	{"count": 5, "colors": 5, "trains_per_color": 2, "tracks": 4, "buffer": 4, "from": 0.08, "to": 0.03},
-	{"count": 5, "colors": 6, "trains_per_color": 2, "tracks": 5, "buffer": 5, "from": 0.07, "to": 0.02},
+	{"count": 1, "colors": 2, "trains_per_color": 1, "tracks": 2, "buffer": 4, "sizes": [3], "hidden": 0.0, "from": 0.90, "to": 0.90,
+		"hint": "Touchez une voie pour envoyer son wagon du bas vers son train. S'il n'est pas attendu, il patiente sur la voie d'attente."},
+	{"count": 2, "colors": 3, "trains_per_color": 1, "tracks": 3, "buffer": 2, "sizes": [3], "hidden": 0.0, "from": 0.65, "to": 0.55},
+	{"count": 3, "colors": 3, "trains_per_color": 2, "tracks": 3, "buffer": 4, "sizes": [2, 3, 4], "hidden": 0.0, "from": 0.45, "to": 0.30,
+		"hint": "Nouveau : les trains n'ont pas tous la même longueur."},
+	{"count": 4, "colors": 4, "trains_per_color": 2, "tracks": 4, "buffer": 4, "sizes": [3], "hidden": 0.0, "from": 0.30, "to": 0.15},
+	{"count": 5, "colors": 4, "trains_per_color": 2, "tracks": 4, "buffer": 3, "sizes": [2, 3, 4], "hidden": 0.0, "from": 0.20, "to": 0.08},
+	{"count": 5, "colors": 5, "trains_per_color": 2, "tracks": 4, "buffer": 5, "sizes": [2, 3, 4], "hidden": 0.0, "from": 0.14, "to": 0.06},
+	{"count": 5, "colors": 5, "trains_per_color": 2, "tracks": 4, "buffer": 4, "sizes": [2, 3, 4], "hidden": 0.0, "from": 0.08, "to": 0.03},
+	{"count": 5, "colors": 6, "trains_per_color": 2, "tracks": 5, "buffer": 5, "sizes": [2, 3, 4], "hidden": 0.0, "from": 0.07, "to": 0.02},
 ]
+## Nombre maximal de wagons par voie (hauteur disponible à l'écran).
+const TRACK_ROWS := 8
 const CANDIDATES := 40
 const PLAYOUTS := 200
 const TRAIN_SIZE := 3
@@ -48,8 +55,10 @@ func _init() -> void:
 				best = level
 				best_rate = rate
 		print("palier %d : %d wagons, par %d/%d, réussite au hasard %.0f %% (cible %.0f %%)" % [
-			levels.size() + 1, int(spec["colors"]) * int(spec["trains_per_color"]) * TRAIN_SIZE,
+			levels.size() + 1, _count(best),
 			best["par"], best["buffer"], best_rate * 100.0, float(spec["target"]) * 100.0])
+		if spec.has("hint"):
+			best["hint"] = spec["hint"]
 		levels.append(best)
 	var f: FileAccess = FileAccess.open("res://data/levels.json", FileAccess.WRITE)
 	f.store_string(JSON.stringify(levels, "\t") + "\n")
@@ -63,6 +72,8 @@ func _specs() -> Array[Dictionary]:
 		var count: int = tier["count"]
 		for i: int in count:
 			var spec: Dictionary = tier.duplicate()
+			if i > 0:
+				spec.erase("hint")
 			var t: float = 0.0 if count == 1 else float(i) / float(count - 1)
 			spec["target"] = lerpf(tier["from"], tier["to"], t)
 			specs.append(spec)
@@ -81,26 +92,60 @@ func _par(level: Dictionary) -> int:
 	return -1
 
 
+func _count(level: Dictionary) -> int:
+	var n: int = 0
+	for track: Array in level["tracks"]:
+		n += track.size()
+	return n
+
+
 func _random_level(spec: Dictionary, rng: RandomNumberGenerator) -> Dictionary:
+	var sizes: Array = spec["sizes"]
+	var track_count: int = spec["tracks"]
 	var wagons: Array[int] = []
-	var trains: Array[int] = []
-	for color: int in int(spec["colors"]):
-		for t: int in int(spec["trains_per_color"]):
-			trains.append(color)
-			for w: int in TRAIN_SIZE:
-				wagons.append(color)
+	var train_colors: Array[int] = []
+	var train_sizes: Array[int] = []
+	while true:
+		wagons.clear()
+		train_colors.clear()
+		train_sizes.clear()
+		for color: int in int(spec["colors"]):
+			for t: int in int(spec["trains_per_color"]):
+				var size: int = sizes[rng.randi_range(0, sizes.size() - 1)]
+				train_colors.append(color)
+				train_sizes.append(size)
+				for w: int in size:
+					wagons.append(color)
+		if wagons.size() <= track_count * TRACK_ROWS:
+			break
 	_shuffle(wagons, rng)
-	_shuffle(trains, rng)
+	# Mélange les trains en gardant couleur et longueur appariées.
+	var order: Array[int] = []
+	for i: int in train_colors.size():
+		order.append(i)
+	_shuffle(order, rng)
+	var trains: Array[int] = []
+	var lengths: Array[int] = []
+	for i: int in order:
+		trains.append(train_colors[i])
+		lengths.append(train_sizes[i])
 	var tracks: Array = []
-	for t: int in int(spec["tracks"]):
+	var hidden: Array = []
+	for t: int in track_count:
 		tracks.append([])
+		hidden.append([])
 	for i: int in wagons.size():
-		tracks[i % tracks.size()].append(wagons[i])
+		var track: Array = tracks[i % track_count]
+		# Le wagon de tête (premier de la voie) n'est jamais masqué.
+		var masked: bool = not track.is_empty() and rng.randf() < float(spec["hidden"])
+		track.append(wagons[i])
+		hidden[i % track_count].append(1 if masked else 0)
 	return {
 		"tracks": tracks,
+		"hidden": hidden,
 		"trains": trains,
+		"train_sizes": lengths,
 		"buffer": spec["buffer"],
-		"train_size": TRAIN_SIZE,
 		"slots": 2,
 	}
 

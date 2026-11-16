@@ -12,6 +12,7 @@ func _init() -> void:
 	_test_expected_wagon_boards_train()
 	_test_unexpected_wagon_waits_then_boards()
 	_test_buffer_is_capped_and_blocks()
+	_test_train_sizes_and_clone()
 	_test_levels_are_consistent_and_solvable()
 	_test_solution_replay_conserves_wagons()
 	print("%d vérifications réussies, %d en échec" % [_passed, _failed])
@@ -72,19 +73,39 @@ func _test_buffer_is_capped_and_blocks() -> void:
 	_check(g.status() == Game.LOST, "gare bloquée")
 
 
+func _test_train_sizes_and_clone() -> void:
+	# Un train rouge de 2 wagons, puis un train bleu de 4.
+	var g: Game = Game.new()
+	g.load_level({"tracks": [[0, 0, 1, 1, 1, 1]], "trains": [0, 1], "train_sizes": [2, 4],
+		"hidden": [[0, 1, 1, 0, 0, 0]], "buffer": 0, "slots": 1})
+	_check(g.hidden[1] == 1 and g.hidden[0] == 0, "wagons mystère lus depuis le niveau")
+	g.take(0)
+	var saved: Game = g.clone() as Game
+	g.take(0)
+	_check(g.settle_step()["type"] == "depart", "le train de 2 part dès 2 wagons")
+	_check(g.slots[0]["size"] == 4, "le train suivant attend 4 wagons")
+	for i: int in 4:
+		g.take(0)
+	g.settle()
+	_check(g.status() == Game.WON, "partie gagnée avec des trains de longueurs différentes")
+	_check(saved.tracks[0].size() == 5 and saved.slots[0]["ids"].size() == 1, "la copie (Annuler) n'est pas modifiée par la suite")
+
+
 func _test_levels_are_consistent_and_solvable() -> void:
 	var levels: Array = _levels()
 	_check(levels.size() >= 30, "au moins trente niveaux")
 	for n: int in levels.size():
 		var level: Dictionary = levels[n]
-		var size: int = int(level.get("train_size", 3))
+		var sizes: Array = level.get("train_sizes", [])
 		var wagons: Dictionary = {}
 		for track: Variant in level["tracks"]:
 			for c: Variant in track:
 				wagons[int(c)] = int(wagons.get(int(c), 0)) + 1
 		var wanted: Dictionary = {}
-		for c: Variant in level["trains"]:
-			wanted[int(c)] = int(wanted.get(int(c), 0)) + size
+		for i: int in level["trains"].size():
+			var c: int = int(level["trains"][i])
+			var size: int = int(sizes[i]) if i < sizes.size() else int(level.get("train_size", 3))
+			wanted[c] = int(wanted.get(c, 0)) + size
 		_check(wagons == wanted, "niveau %d : wagons et trains concordent" % (n + 1))
 		var g: Game = Game.new()
 		g.load_level(level)

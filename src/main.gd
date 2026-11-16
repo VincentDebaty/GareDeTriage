@@ -1,6 +1,8 @@
 extends Node2D
 ## Écran de jeu du prototype « Gare de triage » : rendu provisoire, saisie tactile et retours.
 ## Toute la règle du jeu vit dans triage_game.gd ; ce script ne fait qu'afficher et animer.
+## La règle est appliquée dès la touche ; les animations sont programmées et ne bloquent
+## jamais la saisie.
 
 const Game := preload("res://src/triage_game.gd")
 const Solver := preload("res://src/triage_solver.gd")
@@ -18,31 +20,55 @@ const BG := Color("f3ead7")
 const RAIL := Color("8a7968")
 const INK := Color("2b2d42")
 const GOLD := Color("f2b705")
+## Durées d'essai des animations, en secondes.
 const MOVE_TIME := 0.16
-const DEPART_TIME := 0.45
+const ROLL_TIME := 0.26
+const CASCADE_GAP := 0.14
+const DEPART_TIME := 0.6
+const LOCO_IN_TIME := 0.35
+## Délai entre le début d'un départ et l'arrivée à quai de la locomotive suivante.
+const NEXT_TRAIN_DELAY := 0.12 + DEPART_TIME * 0.7 + LOCO_IN_TIME
 const SAVE_PATH := "user://progress.json"
+## À incrémenter quand le jeu de niveaux change : la progression repart alors de zéro.
+const SAVE_VERSION := 2
 
 var _levels: Array = []
 var _level_index: int = 0
 var _game: Game
 var _wagons: Dictionary = {}
 var _locos: Array[Node2D] = []
+## États précédents, pour le bouton « Annuler ».
+var _history: Array[Game] = []
+## Wagons mystère déjà dévoilés (identifiant -> true).
+var _revealed: Dictionary = {}
+## Ce que l'écran montre pour chaque quai ({color, size}) et pour les trains à venir
+## ([couleur, longueur]). Ces vues suivent les animations, pas la règle : la règle est
+## déjà à jour au moment de la touche, l'affichage change quand le train arrive vraiment.
+var _slot_view: Array[Dictionary] = []
+var _pending_view: Array = []
 var _gen: int = 0
-var _stars: int = 0
+var _stars_total: int = 0
+var _stars_shown: int = 0
 ## Progression enregistrée : niveau courant et meilleure note par niveau.
-var _progress: Dictionary = {"level": 0, "stars": {}}
+var _progress: Dictionary = {"version": SAVE_VERSION, "level": 0, "stars": {}}
 var _save_enabled: bool = true
 
 var _pieces: Node2D
 var _sfx: Sfx
-var _title: Label
+var _title: Button
+var _picker: ColorRect
+var _picker_title: Label
+var _picker_grid: GridContainer
+var _picker_close: Button
 var _hint: Label
 var _stars_label: Label
 var _pending_label: Label
 var _restart: Button
+var _undo_button: Button
 var _overlay: ColorRect
 var _overlay_label: Label
 var _overlay_button: Button
+var _overlay_alt: Button
 var _star_row: Control
 
 
@@ -68,7 +94,8 @@ func _load_progress() -> void:
 	if not _save_enabled or not FileAccess.file_exists(SAVE_PATH):
 		return
 	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(SAVE_PATH))
-	if data is Dictionary and data.has("level") and data.get("stars") is Dictionary:
+	if data is Dictionary and int(data.get("version", 1)) == SAVE_VERSION \
+			and data.has("level") and data.get("stars") is Dictionary:
 		_progress = data
 
 
@@ -97,20 +124,28 @@ func _label(font_size: int) -> Label:
 	return l
 
 
+func _button(text: String, font_size: int, action: Callable) -> Button:
+	var b: Button = Button.new()
+	b.text = text
+	b.add_theme_font_size_override("font_size", font_size)
+	b.pressed.connect(action)
+	return b
+
+
 func _build_ui() -> void:
 	var layer: CanvasLayer = CanvasLayer.new()
 	add_child(layer)
-	_title = _label(40)
+	# Le titre est un bouton : il ouvre le choix du niveau.
+	_title = _button("", 34, _open_picker)
+	_title.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_stars_label = _label(26)
 	_hint = _label(23)
 	_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_pending_label = _label(26)
 	_pending_label.text = "Trains à venir :"
-	_restart = Button.new()
-	_restart.text = "Recommencer"
-	_restart.add_theme_font_size_override("font_size", 26)
-	_restart.pressed.connect(func() -> void: _start_level(_level_index))
-	for c: Control in [_title, _stars_label, _hint, _pending_label, _restart]:
+	_restart = _button("Recommencer", 26, func() -> void: _start_level(_level_index))
+	_undo_button = _button("Annuler", 26, _undo)
+	for c: Control in [_title, _stars_label, _hint, _pending_label, _restart, _undo_button]:
 		layer.add_child(c)
 	_overlay = ColorRect.new()
 	_overlay.color = Color(0.1, 0.1, 0.15, 0.65)
@@ -123,22 +158,71 @@ func _build_ui() -> void:
 	_star_row = Control.new()
 	_star_row.draw.connect(_draw_stars)
 	_overlay.add_child(_star_row)
-	_overlay_button = Button.new()
-	_overlay_button.add_theme_font_size_override("font_size", 38)
-	_overlay_button.pressed.connect(_on_overlay_button)
+	_overlay_button = _button("", 38, _on_overlay_button)
 	_overlay.add_child(_overlay_button)
+	_overlay_alt = _button("Recommencer le niveau", 30, func() -> void: _start_level(_level_index))
+	_overlay.add_child(_overlay_alt)
+	_picker = ColorRect.new()
+	_picker.color = Color(0.1, 0.1, 0.15, 0.92)
+	_picker.visible = false
+	layer.add_child(_picker)
+	_picker_title = Label.new()
+	_picker_title.text = "Choisir un niveau"
+	_picker_title.add_theme_font_size_override("font_size", 44)
+	_picker_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_picker.add_child(_picker_title)
+	_picker_grid = GridContainer.new()
+	_picker_grid.columns = 5
+	_picker_grid.add_theme_constant_override("h_separation", 10)
+	_picker_grid.add_theme_constant_override("v_separation", 10)
+	_picker.add_child(_picker_grid)
+	_picker_close = _button("Fermer", 32, func() -> void: _picker.visible = false)
+	_picker.add_child(_picker_close)
 	_layout_ui()
+
+
+## Ouvre la grille des niveaux. Tous sont accessibles (utile pour les essais) ;
+## les points sous le numéro rappellent la meilleure note obtenue.
+func _open_picker() -> void:
+	for child: Node in _picker_grid.get_children():
+		_picker_grid.remove_child(child)
+		child.queue_free()
+	for i: int in _levels.size():
+		var stars: int = int(_progress["stars"].get(str(i), 0))
+		var b: Button = _button("%d\n%s" % [i + 1, "•".repeat(stars)], 30, _pick_level.bind(i))
+		b.custom_minimum_size = Vector2(100.0, 100.0)
+		if i == _level_index:
+			b.modulate = GOLD
+		_picker_grid.add_child(b)
+	_picker.visible = true
+
+
+func _pick_level(index: int) -> void:
+	_picker.visible = false
+	_progress["level"] = index
+	_save_progress()
+	_start_level(index)
 
 
 func _layout_ui() -> void:
 	var sz: Vector2 = _size()
 	# Décale l'en-tête sous l'encoche ou la barre d'état du téléphone.
 	var dy: float = maxf(0.0, _top_inset() - 50.0)
-	_title.position = Vector2(40.0, 70.0 + dy)
-	_restart.size = Vector2(220.0, 60.0)
-	_restart.position = Vector2(sz.x - 260.0, 66.0 + dy)
-	_stars_label.position = Vector2(40.0, 124.0 + dy)
-	_hint.position = Vector2(40.0, 162.0 + dy)
+	_title.position = Vector2(30.0, 62.0 + dy)
+	_title.size = Vector2(sz.x - 310.0, 56.0)
+	_picker.position = Vector2.ZERO
+	_picker.size = sz
+	_picker_title.position = Vector2(0.0, sz.y * 0.2 - 90.0)
+	_picker_title.size = Vector2(sz.x, 70.0)
+	_picker_grid.position = Vector2((sz.x - 540.0) / 2.0, sz.y * 0.2)
+	_picker_close.size = Vector2(300.0, 80.0)
+	_picker_close.position = Vector2((sz.x - 300.0) / 2.0, sz.y * 0.2 + 680.0)
+	_restart.size = Vector2(220.0, 56.0)
+	_restart.position = Vector2(sz.x - 260.0, 62.0 + dy)
+	_undo_button.size = Vector2(220.0, 56.0)
+	_undo_button.position = Vector2(sz.x - 260.0, 128.0 + dy)
+	_stars_label.position = Vector2(40.0, 130.0 + dy)
+	_hint.position = Vector2(40.0, 196.0 + dy)
 	_hint.size = Vector2(sz.x - 80.0, 70.0)
 	_pending_label.position = Vector2(40.0, sz.y * 0.945 - 18.0)
 	_overlay.position = Vector2.ZERO
@@ -146,8 +230,10 @@ func _layout_ui() -> void:
 	_overlay_label.position = Vector2(0.0, sz.y * 0.30)
 	_overlay_label.size = Vector2(sz.x, 90.0)
 	_star_row.position = Vector2(sz.x / 2.0, sz.y * 0.43)
-	_overlay_button.size = Vector2(420.0, 100.0)
-	_overlay_button.position = Vector2((sz.x - 420.0) / 2.0, sz.y * 0.52)
+	_overlay_button.size = Vector2(460.0, 100.0)
+	_overlay_button.position = Vector2((sz.x - 460.0) / 2.0, sz.y * 0.52)
+	_overlay_alt.size = Vector2(460.0, 80.0)
+	_overlay_alt.position = Vector2((sz.x - 460.0) / 2.0, sz.y * 0.52 + 120.0)
 
 
 ## Hauteur de la zone non sûre en haut de l'écran, en unités du jeu (0 hors mobile).
@@ -169,18 +255,32 @@ func _on_resize() -> void:
 				_locos[s].position = _loco_pos(s)
 
 
-func _show_overlay(text: String, button: String, stars: int) -> void:
+## Affiche le panneau de fin. `stars` > 0 : les étoiles tombent une à une.
+## `alt` : montre aussi le bouton secondaire « Recommencer le niveau ».
+func _show_overlay(text: String, button: String, stars: int, alt: bool) -> void:
 	_overlay_label.text = text
 	_overlay_button.text = button
-	_stars = stars
+	_overlay_alt.visible = alt
+	_stars_total = stars
+	_stars_shown = 0
 	_star_row.queue_redraw()
 	_overlay.visible = true
 	_overlay.modulate.a = 0.0
 	_overlay.create_tween().tween_property(_overlay, "modulate:a", 1.0, 0.25)
+	if stars <= 0:
+		return
+	var tw: Tween = _star_row.create_tween()
+	for i: int in stars:
+		tw.tween_interval(0.32)
+		tw.tween_callback(func() -> void:
+			_stars_shown = i + 1
+			_star_row.queue_redraw()
+			_sfx.play("star", 1.0 + 0.18 * i)
+			Input.vibrate_handheld(20))
 
 
 func _draw_stars() -> void:
-	if _stars <= 0:
+	if _stars_total <= 0:
 		return
 	for i: int in 3:
 		var center: Vector2 = Vector2((i - 1) * 110.0, 0.0)
@@ -188,14 +288,14 @@ func _draw_stars() -> void:
 		for k: int in 10:
 			var radius: float = 48.0 if k % 2 == 0 else 21.0
 			points.append(center + Vector2.from_angle(-PI / 2.0 + k * PI / 5.0) * radius)
-		_star_row.draw_colored_polygon(points, GOLD if i < _stars else Color(1, 1, 1, 0.25))
+		_star_row.draw_colored_polygon(points, GOLD if i < _stars_shown else Color(1, 1, 1, 0.25))
 
 
 func _on_overlay_button() -> void:
 	if _game.status() == Game.WON:
 		_start_level((_level_index + 1) % _levels.size())
 	else:
-		_start_level(_level_index)
+		_undo()
 
 
 # --- Géométrie ---------------------------------------------------------------
@@ -246,23 +346,46 @@ func _start_level(index: int) -> void:
 	_gen += 1
 	_level_index = index
 	_overlay.visible = false
+	_history.clear()
+	_revealed.clear()
+	_game = Game.new()
+	_game.load_level(_levels[index])
+	_rebuild()
+	_title.text = "Niveau %d / %d" % [index + 1, _levels.size()]
+	_stars_label.text = "Étoiles : %d / %d" % [_total_stars(), _levels.size() * 3]
+	_hint.text = str(_levels[index].get("hint", ""))
+
+
+## Recrée tous les wagons et locomotives d'après l'état de la règle, sans animation.
+func _rebuild() -> void:
 	for child: Node in _pieces.get_children():
 		child.queue_free()
 	_wagons.clear()
 	_locos.clear()
-	_game = Game.new()
-	_game.load_level(_levels[index])
-	for id: int in _game.colors.size():
-		_wagons[id] = _new_piece(PALETTE[_game.colors[id]], false)
+	var ids: Array[int] = []
+	for track: Array in _game.tracks:
+		ids.append_array(track)
+	ids.append_array(_game.buffer)
+	for slot: Dictionary in _game.slots:
+		ids.append_array(slot["ids"])
+	for id: int in ids:
+		var w: Node2D = _new_piece(PALETTE[_game.colors[id]], false)
+		w.masked = _game.hidden[id] == 1 and not _revealed.has(id)
+		_wagons[id] = w
+	_slot_view.clear()
 	for s: int in _game.slots.size():
 		_locos.append(null)
 		_spawn_loco(s)
-	_title.text = "Niveau %d / %d" % [index + 1, _levels.size()]
-	_stars_label.text = "Étoiles : %d / %d" % [_total_stars(), _levels.size() * 3]
-	_hint.text = ""
-	if index == 0:
-		_hint.text = "Touchez une voie pour envoyer son wagon du bas vers son train. S'il n'est pas attendu, il patiente sur la voie d'attente."
+		_slot_view.append({"color": _game.slots[s]["color"], "size": _game.slots[s]["size"]})
+	_pending_view = _pending_snapshot()
 	_relayout(0.0)
+
+
+func _pending_snapshot() -> Array:
+	var list: Array = []
+	for p: int in _game.pending.size():
+		list.append([_game.pending[p], _game.pending_sizes[p]])
+	return list
 
 
 func _new_piece(color: Color, is_loco: bool) -> Node2D:
@@ -273,9 +396,11 @@ func _new_piece(color: Color, is_loco: bool) -> Node2D:
 	return p
 
 
-## Crée la locomotive du quai. Avec `delay` >= 0, elle entre par la gauche après ce délai.
+## Crée la locomotive du quai. Avec `delay` >= 0, elle entre par la gauche après ce délai ;
+## les cadres du quai et la liste des trains à venir ne changent qu'à son arrivée.
 func _spawn_loco(slot: int, delay: float = -1.0) -> void:
 	var color: int = _game.slots[slot]["color"]
+	var view: Dictionary = {"color": color, "size": _game.slots[slot]["size"]}
 	if color == -1:
 		_locos[slot] = null
 		return
@@ -284,22 +409,60 @@ func _spawn_loco(slot: int, delay: float = -1.0) -> void:
 	if delay < 0.0:
 		loco.position = _loco_pos(slot)
 		return
+	var pending: Array = _pending_snapshot()
 	loco.position = Vector2(-200.0, _loco_pos(slot).y)
 	var tw: Tween = loco.create_tween()
 	tw.tween_interval(delay)
-	tw.tween_property(loco, "position", _loco_pos(slot), 0.3).set_trans(Tween.TRANS_SINE)
+	tw.tween_property(loco, "position", _loco_pos(slot), LOCO_IN_TIME).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_callback(func() -> void:
+		_slot_view[slot] = view
+		_pending_view = pending
+		queue_redraw())
 
 
 func _wait(seconds: float) -> void:
 	await get_tree().create_timer(seconds).timeout
 
 
+func _stop_move(node: Node2D) -> void:
+	if node.has_meta("move"):
+		var old: Tween = node.get_meta("move")
+		if old != null and old.is_valid():
+			old.kill()
+		node.remove_meta("move")
+
+
+## Glissement simple en ligne droite (décalage d'une voie, resserrement de l'attente).
 func _move(node: Node2D, target: Vector2, duration: float) -> void:
+	_stop_move(node)
 	if duration <= 0.0:
 		node.position = target
 	elif node.position != target:
 		var tw: Tween = node.create_tween()
 		tw.tween_property(node, "position", target, duration).set_trans(Tween.TRANS_SINE)
+		node.set_meta("move", tw)
+
+
+## Fait rouler un wagon jusqu'à `target` : il descend sa voie, puis longe le quai.
+## `on_start` et `on_arrive` sont appelés au départ et à l'arrivée (Callable() pour rien).
+func _roll(node: Node2D, target: Vector2, delay: float, on_start: Callable, on_arrive: Callable) -> void:
+	_stop_move(node)
+	var dy: float = absf(target.y - node.position.y)
+	var dx: float = absf(target.x - node.position.x)
+	var total: float = maxf(dx + dy, 1.0)
+	var tw: Tween = node.create_tween()
+	if delay > 0.0:
+		tw.tween_interval(delay)
+	tw.tween_callback(func() -> void:
+		node.z_index = 5
+		if on_start.is_valid():
+			on_start.call())
+	tw.tween_property(node, "position:y", target.y, maxf(0.01, ROLL_TIME * dy / total)).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	tw.tween_property(node, "position:x", target.x, maxf(0.01, ROLL_TIME * dx / total)).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_callback(func() -> void:
+		node.z_index = 0
+		if on_arrive.is_valid():
+			on_arrive.call())
 
 
 func _pop(node: Node2D) -> void:
@@ -307,24 +470,36 @@ func _pop(node: Node2D) -> void:
 	node.create_tween().tween_property(node, "scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
+## Attelage : claquement et petit écrasement du wagon contre le train.
+func _couple(node: Node2D) -> void:
+	_sfx.play("clack")
+	node.scale = Vector2(0.82, 1.12)
+	node.create_tween().tween_property(node, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
 func _shake(node: Node2D) -> void:
+	_stop_move(node)
 	var x: float = node.position.x
 	var tw: Tween = node.create_tween()
 	for dx: float in [10.0, -10.0, 6.0, 0.0]:
 		tw.tween_property(node, "position:x", x + dx, 0.04)
+	node.set_meta("move", tw)
 
 
-## Place chaque wagon là où la logique dit qu'il se trouve.
-func _relayout(duration: float) -> void:
+## Place les wagons des voies et de l'attente là où la règle dit qu'ils se trouvent.
+## `skip_id` : wagon dont le déplacement est déjà animé par ailleurs.
+func _relayout(duration: float, skip_id: int = -1) -> void:
 	for t: int in _game.tracks.size():
 		for k: int in _game.tracks[t].size():
-			var w: Node2D = _wagons[_game.tracks[t][k]]
+			var id: int = _game.tracks[t][k]
+			var w: Node2D = _wagons[id]
 			_move(w, _track_pos(t, k), duration)
 			w.modulate = Color(1, 1, 1, 1.0 if k == 0 else 0.5)
+			if k == 0 and w.masked:
+				_reveal(id, duration > 0.0)
 	for b: int in _game.buffer.size():
-		var w: Node2D = _wagons[_game.buffer[b]]
-		_move(w, _buffer_pos(b), duration)
-		w.modulate = Color.WHITE
+		if _game.buffer[b] != skip_id:
+			_move(_wagons[_game.buffer[b]], _buffer_pos(b), duration)
 	# Les wagons à quai sont placés par leurs propres animations ; on ne les
 	# repositionne ici que pour un placement immédiat (changement de taille d'écran).
 	if duration <= 0.0:
@@ -333,6 +508,21 @@ func _relayout(duration: float) -> void:
 			for k: int in ids.size():
 				_move(_wagons[ids[k]], _slot_pos(s, k), 0.0)
 	queue_redraw()
+
+
+## Dévoile un wagon mystère arrivé en tête de voie.
+func _reveal(id: int, animated: bool) -> void:
+	var w: Node2D = _wagons[id]
+	_revealed[id] = true
+	if not animated:
+		w.masked = false
+		return
+	var tw: Tween = w.create_tween()
+	tw.tween_property(w, "scale:x", 0.0, 0.09)
+	tw.tween_callback(func() -> void:
+		w.masked = false
+		_sfx.play("reveal"))
+	tw.tween_property(w, "scale:x", 1.0, 0.09)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -350,53 +540,64 @@ func _unhandled_input(event: InputEvent) -> void:
 func _take(track: int) -> void:
 	if _game.status() != Game.PLAYING or _game.tracks[track].is_empty():
 		return
-	var head: Node2D = _wagons[_game.tracks[track][0]]
+	var id: int = _game.tracks[track][0]
+	var head: Node2D = _wagons[id]
+	var before: Game = _game.clone() as Game
 	var ev: Dictionary = _game.take(track)
 	if ev.is_empty():
 		_shake(head)
 		_sfx.play("nope")
 		return
+	_history.append(before)
 	# La règle est appliquée tout de suite, jusqu'au bout des mouvements automatiques.
 	# Les animations sont seulement programmées : elles ne bloquent jamais la saisie.
 	head.modulate = Color.WHITE
-	if ev["slot"] >= 0:
-		_move(head, _slot_pos(ev["slot"], _game.slots[ev["slot"]]["ids"].size() - 1), MOVE_TIME)
 	_pop(head)
-	_sfx.play("pop" if ev["slot"] >= 0 else "wait")
 	Input.vibrate_handheld(15)
-	var t: float = 0.0
+	var slot: int = ev["slot"]
+	if slot >= 0:
+		_sfx.play("pop")
+		_roll(head, _slot_pos(slot, _game.slots[slot]["ids"].size() - 1), 0.0, Callable(), _couple.bind(head))
+	else:
+		_sfx.play("wait")
+		_roll(head, _buffer_pos(_game.buffer.size() - 1), 0.0, Callable(), Callable())
+	# Enchaînement : les wagons en attente montent en cascade, un train complet part
+	# dès que son dernier wagon est attelé.
+	var next_start: float = CASCADE_GAP
+	var last_arrival: float = ROLL_TIME
 	var chain: int = 0
 	while true:
 		var step: Dictionary = _game.settle_step()
 		if step.is_empty():
 			break
-		t += MOVE_TIME
 		if step["type"] == "load":
 			chain += 1
-			_schedule_load(step, t, chain)
+			_schedule_load(step, next_start, chain)
+			last_arrival = next_start + ROLL_TIME
+			next_start += CASCADE_GAP
 		else:
-			_schedule_depart(step, t)
-			t += DEPART_TIME
-	_relayout(MOVE_TIME)
+			var start: float = maxf(next_start, last_arrival)
+			_schedule_depart(step, start)
+			# Les wagons en attente pour le train suivant arrivent en même temps que lui.
+			next_start = start + NEXT_TRAIN_DELAY - ROLL_TIME
+			last_arrival = start + NEXT_TRAIN_DELAY
+	_relayout(MOVE_TIME, id)
 	if _game.status() != Game.PLAYING:
 		var gen: int = _gen
-		get_tree().create_timer(t + 0.5).timeout.connect(func() -> void:
+		get_tree().create_timer(maxf(next_start, last_arrival) + 0.5).timeout.connect(func() -> void:
 			if gen == _gen:
 				_finish())
 
 
 ## Un wagon en attente rejoint son train après `delay` secondes.
-## Enchaînement : chaque wagon qui monte sonne un peu plus aigu.
+## Chaque wagon de l'enchaînement sonne un peu plus aigu que le précédent.
 func _schedule_load(step: Dictionary, delay: float, chain: int) -> void:
 	var w: Node2D = _wagons[step["id"]]
 	var slot: int = step["slot"]
 	var target: Vector2 = _slot_pos(slot, _game.slots[slot]["ids"].size() - 1)
-	var tw: Tween = w.create_tween()
-	tw.tween_interval(delay)
-	tw.tween_callback(func() -> void:
+	_roll(w, target, delay, func() -> void:
 		_pop(w)
-		_sfx.play("pop", 1.0 + 0.15 * chain))
-	tw.tween_property(w, "position", target, MOVE_TIME).set_trans(Tween.TRANS_SINE)
+		_sfx.play("pop", 1.0 + 0.15 * chain), _couple.bind(w))
 
 
 ## Le train complet d'un quai part après `delay` secondes ; le suivant le remplace.
@@ -416,9 +617,14 @@ func _schedule_depart(step: Dictionary, delay: float) -> void:
 				Input.vibrate_handheld(40)
 				loco.add_child(_smoke()))
 		tw.tween_interval(0.12)
-		tw.tween_property(n, "position:x", _size().x + 300.0, DEPART_TIME).as_relative().set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		if n == loco:
+			# Le quai se vide de ses cadres au moment où le train s'ébranle.
+			tw.tween_callback(func() -> void:
+				_slot_view[slot] = {"color": -1, "size": 0}
+				queue_redraw())
+		tw.tween_property(n, "position:x", _size().x + 300.0, DEPART_TIME).as_relative().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
 		tw.tween_callback(n.queue_free)
-	_spawn_loco(slot, delay + 0.12 + DEPART_TIME)
+	_spawn_loco(slot, delay + NEXT_TRAIN_DELAY - LOCO_IN_TIME)
 	queue_redraw()
 
 
@@ -428,21 +634,34 @@ func _finish() -> void:
 			_celebrate()
 		Game.LOST:
 			_sfx.play("lose")
-			_show_overlay("Gare bloquée !", "Recommencer", 0)
+			_show_overlay("Gare bloquée !", "Annuler le dernier coup", 0, true)
+
+
+## Revient à l'état d'avant le dernier coup.
+func _undo() -> void:
+	if _history.is_empty():
+		_sfx.play("nope")
+		return
+	_gen += 1
+	_game = _history.pop_back()
+	_overlay.visible = false
+	_rebuild()
+	_sfx.play("undo")
 
 
 func _smoke() -> CPUParticles2D:
 	var p: CPUParticles2D = CPUParticles2D.new()
 	p.position = Vector2(26.0, -20.0)
-	p.amount = 14
-	p.lifetime = 0.7
-	p.direction = Vector2(-0.4, -1.0)
+	p.amount = 18
+	p.lifetime = 0.8
+	p.local_coords = false
+	p.direction = Vector2(-0.3, -1.0)
 	p.spread = 25.0
 	p.gravity = Vector2.ZERO
 	p.initial_velocity_min = 60.0
 	p.initial_velocity_max = 120.0
 	p.scale_amount_min = 10.0
-	p.scale_amount_max = 20.0
+	p.scale_amount_max = 22.0
 	p.color = Color(0.35, 0.35, 0.4, 0.55)
 	return p
 
@@ -480,9 +699,9 @@ func _celebrate() -> void:
 	confetti.emitting = true
 	get_tree().create_timer(3.0).timeout.connect(fx.queue_free)
 	if _level_index == _levels.size() - 1:
-		_show_overlay("Bravo, tout est réussi !", "Rejouer depuis le début", stars)
+		_show_overlay("Bravo, tout est réussi !", "Rejouer depuis le début", stars, false)
 	else:
-		_show_overlay("Niveau réussi !", "Niveau suivant", stars)
+		_show_overlay("Niveau réussi !", "Niveau suivant", stars, false)
 
 
 # --- Décor -------------------------------------------------------------------
@@ -502,6 +721,7 @@ func _draw() -> void:
 	if _game == null:
 		return
 	var sz: Vector2 = _size()
+	var font: Font = ThemeDB.fallback_font
 	# Voies d'arrivée : le wagon du bas est celui qu'on peut prendre.
 	for t: int in _game.tracks.size():
 		var x: float = _track_x(t)
@@ -518,19 +738,23 @@ func _draw() -> void:
 	for s: int in _game.slots.size():
 		var loco: Vector2 = _loco_pos(s)
 		_track(Vector2(0.0, loco.y), Vector2(sz.x, loco.y))
-		if _game.slots[s]["color"] == -1:
+		if s >= _slot_view.size() or _slot_view[s]["color"] == -1:
 			continue
-		for k: int in _game.train_size:
-			_place(_slot_pos(s, k), PALETTE[_game.slots[s]["color"]])
-	# Trains à venir.
-	for p: int in _game.pending.size():
-		draw_circle(Vector2(264.0 + p * 36.0, sz.y * 0.945), 13.0, PALETTE[_game.pending[p]])
+		for k: int in int(_slot_view[s]["size"]):
+			_place(_slot_pos(s, k), PALETTE[_slot_view[s]["color"]])
+	# Trains à venir : couleur et longueur.
+	for p: int in _pending_view.size():
+		var center: Vector2 = Vector2(266.0 + p * 38.0, sz.y * 0.945)
+		draw_circle(center, 16.0, PALETTE[_pending_view[p][0]])
+		draw_string(font, center + Vector2(-16.0, 7.0), str(_pending_view[p][1]),
+			HORIZONTAL_ALIGNMENT_CENTER, 32.0, 20, Color.WHITE)
 
 
 # --- Vérification automatique --------------------------------------------------
 
 ## Options après « -- » : --level=N, --autoplay=K (K coups du solveur), --pace=S (secondes
-## entre deux touches, 0 = rafale), --wait=S (attente avant capture), --shot=chemin.png.
+## entre deux touches, 0 = rafale), --undo=N (N annulations ensuite), --wait=S (attente
+## avant capture), --picker=1 (ouvre le choix du niveau), --shot=chemin.png.
 func _debug_hook() -> void:
 	var opts: Dictionary = {}
 	for a: String in OS.get_cmdline_user_args():
@@ -547,6 +771,11 @@ func _debug_hook() -> void:
 		_take(solution[k])
 		if pace > 0.0:
 			await _wait(pace)
+	if opts.has("picker"):
+		_open_picker()
+	for n: int in int(opts.get("undo", "0")):
+		await _wait(0.4)
+		_undo()
 	if opts.has("shot"):
 		await _wait(float(opts.get("wait", "2.5")))
 		get_viewport().get_texture().get_image().save_png(opts["shot"])
