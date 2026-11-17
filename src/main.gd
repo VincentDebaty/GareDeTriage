@@ -11,16 +11,21 @@ const Sfx := preload("res://src/sfx.gd")
 const MapView := preload("res://src/map_view.gd")
 
 const PALETTE: Array[Color] = [
-	Color("e4572e"), Color("3b8eea"), Color("f2c14e"),
-	Color("4caf6d"), Color("9b5de5"), Color("ec6fa9"),
+	Color("f0412b"), Color("2f86f5"), Color("ffc61a"),
+	Color("2fb344"), Color("a35cf2"), Color("f760b4"),
 ]
 const STEP := 74.0
 const TRACK_STEP := 68.0
 const TRACK_ROWS := 8
-const BG := Color("f3ead7")
-const RAIL := Color("8a7968")
-const INK := Color("2b2d42")
-const GOLD := Color("f2b705")
+const BG := Color("231d55")
+const RAIL := Color("d6d0f7")
+const TIE := Color("6d61c9")
+const INK := Color("1b1642")
+const GOLD := Color("ffc61a")
+## Plateau en relief, creux des voies, texte clair, boutons.
+const TRAY := Color("453a9e")
+const SLOT := Color("2a2370")
+const LIGHT := Color("efeaff")
 ## Réseau : abscisse de la voie en échelle (bord gauche) et rayon des courbes.
 const LADDER_X := 62.0
 const BEND := 36.0
@@ -63,6 +68,8 @@ var _view_seq: int = 0
 var _view_applied: int = 0
 var _slot_applied: Array[int] = []
 var _gen: int = 0
+## Images du décor (assets/ui), gardées en mémoire pour le dessin.
+var _tex: Dictionary = {}
 var _stars_total: int = 0
 var _stars_shown: int = 0
 ## Progression enregistrée : niveau courant et meilleure note par niveau.
@@ -89,6 +96,15 @@ var _star_row: Control
 
 func _ready() -> void:
 	RenderingServer.set_default_clear_color(BG)
+	# Police ronde et grasse du système (aucun fichier à embarquer).
+	var font: SystemFont = SystemFont.new()
+	font.font_names = PackedStringArray(["Arial Rounded MT Bold", "Arial Rounded MT", "Helvetica Neue", "Arial"])
+	font.font_weight = 700
+	ThemeDB.fallback_font = font
+	for name: String in ["tray", "slot", "socket", "tie", "knob", "bumper"]:
+		_tex[name] = load("res://assets/ui/%s.svg" % name)
+	for i: int in PALETTE.size():
+		_tex["chip_%d" % i] = load("res://assets/ui/chip_%d.svg" % i)
 	_levels = JSON.parse_string(FileAccess.get_file_as_string("res://data/levels.json"))
 	_line = JSON.parse_string(FileAccess.get_file_as_string("res://data/line.json"))
 	_pieces = Node2D.new()
@@ -152,8 +168,60 @@ func _total_stars() -> int:
 func _label(font_size: int) -> Label:
 	var l: Label = Label.new()
 	l.add_theme_font_size_override("font_size", font_size)
-	l.add_theme_color_override("font_color", INK)
+	l.add_theme_color_override("font_color", LIGHT)
+	l.add_theme_color_override("font_outline_color", INK)
+	l.add_theme_constant_override("outline_size", 8)
 	return l
+
+
+## Boîte arrondie ; `depth` > 0 ajoute une tranche sombre en bas (relief).
+func _box(fill: Color, radius: int, depth: int = 0) -> StyleBoxFlat:
+	var box: StyleBoxFlat = StyleBoxFlat.new()
+	box.bg_color = fill
+	box.set_corner_radius_all(radius)
+	box.anti_aliasing_size = 1.5
+	if depth > 0:
+		box.border_width_bottom = depth
+		box.border_color = fill.darkened(0.42)
+	return box
+
+
+## Bouton bombé : une image en 9 tranches (assets/ui/button_<look>.svg) glissée derrière
+## le texte, remplacée par sa version enfoncée pendant l'appui.
+func _style_button(b: Button, look: String) -> void:
+	var normal: Texture2D = load("res://assets/ui/button_%s.svg" % look)
+	var pressed: Texture2D = load("res://assets/ui/button_%s_pressed.svg" % look)
+	var bg: NinePatchRect = b.get_node_or_null("Bg") as NinePatchRect
+	if bg == null:
+		bg = NinePatchRect.new()
+		bg.name = "Bg"
+		bg.show_behind_parent = true
+		bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		# L'image est dessinée au double de sa taille à l'écran.
+		bg.scale = Vector2(0.5, 0.5)
+		bg.patch_margin_left = 50
+		bg.patch_margin_right = 50
+		bg.patch_margin_top = 50
+		bg.patch_margin_bottom = 60
+		b.add_child(bg)
+		b.resized.connect(func() -> void: bg.size = b.size * 2.0)
+		b.button_down.connect(func() -> void: bg.texture = b.get_meta("pressed_tex"))
+		b.button_up.connect(func() -> void: bg.texture = b.get_meta("normal_tex"))
+	b.set_meta("normal_tex", normal)
+	b.set_meta("pressed_tex", pressed)
+	bg.texture = normal
+	bg.size = b.size * 2.0
+	var empty: StyleBoxEmpty = StyleBoxEmpty.new()
+	empty.content_margin_left = 18.0
+	empty.content_margin_right = 18.0
+	# Le texte se centre sur le dessus du bouton, pas sur sa tranche.
+	empty.content_margin_bottom = 8.0
+	for state: String in ["normal", "hover", "pressed", "focus", "disabled"]:
+		b.add_theme_stylebox_override(state, empty)
+	for state: String in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		b.add_theme_color_override(state, Color.WHITE)
+	b.add_theme_color_override("font_outline_color", INK)
+	b.add_theme_constant_override("outline_size", 8)
 
 
 func _button(text: String, font_size: int, action: Callable) -> Button:
@@ -161,6 +229,7 @@ func _button(text: String, font_size: int, action: Callable) -> Button:
 	b.text = text
 	b.add_theme_font_size_override("font_size", font_size)
 	b.pressed.connect(action)
+	_style_button(b, "violet")
 	return b
 
 
@@ -170,6 +239,7 @@ func _build_ui() -> void:
 	# Le titre est un bouton : il ouvre la carte de la ligne.
 	_title = _button("", 30, _open_map)
 	_title.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_style_button(_title, "dark")
 	_stars_label = _label(26)
 	_hint = _label(23)
 	_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -190,7 +260,10 @@ func _build_ui() -> void:
 	_star_row = Control.new()
 	_star_row.draw.connect(_draw_stars)
 	_overlay.add_child(_star_row)
+	_overlay_label.add_theme_color_override("font_outline_color", INK)
+	_overlay_label.add_theme_constant_override("outline_size", 14)
 	_overlay_button = _button("", 38, _on_overlay_button)
+	_style_button(_overlay_button, "green")
 	_overlay.add_child(_overlay_button)
 	_overlay_alt = _button("", 30, _on_overlay_alt)
 	_overlay.add_child(_overlay_alt)
@@ -221,18 +294,18 @@ func _layout_ui() -> void:
 	# Décale l'en-tête sous l'encoche ou la barre d'état du téléphone.
 	var dy: float = maxf(0.0, _top_inset() - 50.0)
 	_title.position = Vector2(30.0, 62.0 + dy)
-	_title.size = Vector2(sz.x - 310.0, 56.0)
+	_title.size = Vector2(sz.x - 310.0, 60.0)
 	_map.position = Vector2.ZERO
 	_map.top_inset = dy
 	_map.size = sz
-	_restart.size = Vector2(220.0, 56.0)
+	_restart.size = Vector2(220.0, 60.0)
 	_restart.position = Vector2(sz.x - 260.0, 62.0 + dy)
-	_undo_button.size = Vector2(220.0, 56.0)
-	_undo_button.position = Vector2(sz.x - 260.0, 128.0 + dy)
-	_stars_label.position = Vector2(40.0, 130.0 + dy)
+	_undo_button.size = Vector2(220.0, 60.0)
+	_undo_button.position = Vector2(sz.x - 260.0, 134.0 + dy)
+	_stars_label.position = Vector2(40.0, 140.0 + dy)
 	_hint.position = Vector2(40.0, 196.0 + dy)
 	_hint.size = Vector2(sz.x - 80.0, 70.0)
-	_pending_label.position = Vector2(40.0, sz.y * 0.945 - 18.0)
+	_pending_label.position = Vector2(40.0, sz.y * 0.962 - 18.0)
 	_overlay.position = Vector2.ZERO
 	_overlay.size = sz
 	_overlay_label.position = Vector2(0.0, sz.y * 0.30)
@@ -474,6 +547,7 @@ func _new_piece(kind: int, is_loco: bool) -> Node2D:
 	var p: Node2D = Piece.new()
 	p.color = PALETTE[kind] if kind < PALETTE.size() else Color.WHITE
 	p.is_bonus = kind == Game.BONUS
+	p.kind = kind
 	p.is_loco = is_loco
 	_pieces.add_child(p)
 	return p
@@ -834,6 +908,26 @@ func _celebrate() -> void:
 
 # --- Décor -------------------------------------------------------------------
 
+## Dessine une image en 9 tranches dans `rect`. `margin` : taille des bords à l'écran
+## (l'image est au double de cette taille).
+func _nine(tex: Texture2D, rect: Rect2, margin: float) -> void:
+	var src: Vector2 = tex.get_size()
+	var dx: Array[float] = [rect.position.x, rect.position.x + margin, rect.end.x - margin, rect.end.x]
+	var dy: Array[float] = [rect.position.y, rect.position.y + margin, rect.end.y - margin, rect.end.y]
+	var sx: Array[float] = [0.0, margin * 2.0, src.x - margin * 2.0, src.x]
+	var sy: Array[float] = [0.0, margin * 2.0, src.y - margin * 2.0, src.y]
+	for i: int in 3:
+		for j: int in 3:
+			draw_texture_rect_region(tex, Rect2(dx[i], dy[j], dx[i + 1] - dx[i], dy[j + 1] - dy[j]),
+				Rect2(sx[i], sy[j], sx[i + 1] - sx[i], sy[j + 1] - sy[j]))
+
+
+## Lit de la voie : une rainure dans le plateau, de la couleur des creux des voies.
+func _bed(points: PackedVector2Array) -> void:
+	draw_polyline(points, SLOT.darkened(0.25), 64.0, true)
+	draw_polyline(points, SLOT, 58.0, true)
+
+
 ## Traverses le long d'une ligne, sur `max_length` pixels au plus (0 = toute la ligne).
 func _ties(points: PackedVector2Array, max_length: float = 0.0) -> void:
 	var curve: Curve2D = Curve2D.new()
@@ -842,42 +936,57 @@ func _ties(points: PackedVector2Array, max_length: float = 0.0) -> void:
 	var length: float = curve.get_baked_length()
 	if max_length > 0.0:
 		length = minf(length, max_length)
+	var tex: Texture2D = _tex["tie"]
 	var at: float = 10.0
 	while at < length:
 		var here: Vector2 = curve.sample_baked(at)
 		var ahead: Vector2 = curve.sample_baked(at + 2.0)
-		var normal: Vector2 = (ahead - here).normalized().orthogonal() * 25.0
-		draw_line(here + normal, here - normal, Color(RAIL, 0.38), 7.0)
+		draw_set_transform(here, (ahead - here).orthogonal().angle())
+		draw_texture_rect(tex, Rect2(-25.0, -4.5, 50.0, 12.0), false)
 		at += 22.0
+	draw_set_transform(Vector2.ZERO, 0.0)
 
 
-## Les deux rails d'une ligne.
+## Les deux rails d'une ligne : ombre, métal, reflet.
 func _rails(points: PackedVector2Array) -> void:
-	var left: PackedVector2Array = PackedVector2Array()
-	var right: PackedVector2Array = PackedVector2Array()
-	for i: int in points.size():
-		var dir: Vector2 = (points[mini(i + 1, points.size() - 1)] - points[maxi(i - 1, 0)]).normalized()
-		left.append(points[i] + dir.orthogonal() * 18.0)
-		right.append(points[i] - dir.orthogonal() * 18.0)
-	draw_polyline(left, RAIL, 5.0, true)
-	draw_polyline(right, RAIL, 5.0, true)
+	for side: float in [1.0, -1.0]:
+		var rail: PackedVector2Array = PackedVector2Array()
+		var shadow: PackedVector2Array = PackedVector2Array()
+		var shine: PackedVector2Array = PackedVector2Array()
+		for i: int in points.size():
+			var dir: Vector2 = (points[mini(i + 1, points.size() - 1)] - points[maxi(i - 1, 0)]).normalized()
+			var p: Vector2 = points[i] + dir.orthogonal() * 18.0 * side
+			rail.append(p)
+			shadow.append(p + Vector2(0.0, 3.5))
+			shine.append(p + Vector2(-0.8, -1.4))
+		draw_polyline(shadow, Color(0.03, 0.01, 0.12, 0.5), 6.5, true)
+		draw_polyline(rail, Color("b9b1ec"), 6.5, true)
+		draw_polyline(shine, Color.WHITE, 2.2, true)
 
 
 ## Heurtoir en bout de voie.
 func _bumper(center: Vector2, vertical_track: bool) -> void:
-	var half: Vector2 = Vector2(27.0, 6.0) if vertical_track else Vector2(6.0, 27.0)
-	draw_rect(Rect2(center - half, half * 2.0), INK)
+	draw_set_transform(center, 0.0 if vertical_track else PI / 2.0)
+	draw_texture_rect(_tex["bumper"], Rect2(-29.0, -8.0, 58.0, 22.0), false)
+	draw_set_transform(Vector2.ZERO, 0.0)
 
 
-## Aiguillage : un point, et une lame dorée orientée vers `toward`.
+func _knob(at: Vector2) -> void:
+	draw_texture_rect(_tex["knob"], Rect2(at - Vector2(13.0, 13.0), Vector2(26.0, 28.0)), false)
+
+
+## Aiguillage : un bouton, et une lame dorée orientée vers `toward`.
 func _switch(at: Vector2, toward: Vector2) -> void:
-	draw_line(at, at + toward.normalized() * 30.0, GOLD, 7.0, true)
-	draw_circle(at, 9.0, INK)
+	var tip: Vector2 = at + toward.normalized() * 30.0
+	draw_line(at + Vector2(0.0, 3.0), tip + Vector2(0.0, 3.0), Color(0.03, 0.01, 0.12, 0.5), 8.0, true)
+	draw_line(at, tip, Color("e7a400"), 8.0, true)
+	draw_line(at + Vector2(-1.0, -1.5), tip + Vector2(-1.0, -1.5), Color("fff0a8"), 3.0, true)
+	_knob(at)
 
 
+## Emplacement à remplir : un creux teinté, cerclé de la couleur attendue.
 func _place(center: Vector2, color: Color) -> void:
-	draw_rect(Rect2(center - Vector2(32.0, 32.0), Vector2(64.0, 64.0)), Color(color, 0.22))
-	draw_rect(Rect2(center - Vector2(32.0, 32.0), Vector2(64.0, 64.0)), color, false, 3.0)
+	draw_texture_rect(_tex["socket"], Rect2(center - Vector2(33.0, 33.0), Vector2(66.0, 70.0)), false, color)
 
 
 func _draw() -> void:
@@ -893,9 +1002,12 @@ func _draw() -> void:
 	var buffer_end: Vector2 = _buffer_pos(maxi(places, 1) - 1) + Vector2(50.0, 0.0)
 	# Lignes du réseau. Chaque voie d'arrivée descend, rejoint la collectrice, puis
 	# l'échelle (bord gauche) qui distribue la voie d'attente et les quais.
+	# Plateau en relief qui porte toute la gare, puis le creux de chaque voie d'arrivée.
+	var tray: Rect2 = Rect2(8.0, top - 26.0, sz.x - 16.0, _lane_y(last_lane) + 60.0 - (top - 26.0))
+	_nine(_tex["tray"], Rect2(tray.position - Vector2(4.0, 4.0), tray.size + Vector2(8.0, 24.0)), 50.0)
 	var arrivals: Array[PackedVector2Array] = []
 	for t: int in n:
-		draw_rect(_track_rect(t), Color(1, 1, 1, 0.35))
+		_nine(_tex["slot"], _track_rect(t), 30.0)
 		var route: Array[Vector2] = [Vector2(_track_x(t), top)]
 		route.append_array(_route_from_track(t, last_lane))
 		route.append(Vector2(sz.x + 40.0, _lane_y(last_lane)))
@@ -909,6 +1021,10 @@ func _draw() -> void:
 		lanes.append(PackedVector2Array([Vector2(-40.0, _lane_y(lane)), Vector2(LADDER_X + BEND, _lane_y(lane))]))
 	# Traverses d'abord, rails ensuite. La voie d'arrivée la plus à droite porte les
 	# traverses de toute la ligne principale ; les autres s'arrêtent à la collectrice.
+	for line: PackedVector2Array in arrivals:
+		_bed(line)
+	for line: PackedVector2Array in lanes:
+		_bed(line)
 	for t: int in n:
 		_ties(arrivals[t], 0.0 if t == n - 1 else cy - top - BEND * 0.4)
 	for line: PackedVector2Array in lanes:
@@ -923,14 +1039,15 @@ func _draw() -> void:
 	_bumper(buffer_end, false)
 	# Aiguillages : entrée de chaque voie sur la collectrice, puis départs de l'échelle.
 	for t: int in n - 1:
-		draw_circle(Vector2(_track_x(t) - minf(BEND, (_track_x(t) - LADDER_X) / 2.0), cy), 9.0, INK)
+		var joint: Vector2 = Vector2(_track_x(t) - minf(BEND, (_track_x(t) - LADDER_X) / 2.0), cy)
+		_knob(joint)
 	for lane: int in last_lane:
 		_switch(Vector2(LADDER_X, _lane_y(lane) - BEND),
 			Vector2(0.45, 1.0) if _switch_lane == lane else Vector2(0.0, 1.0))
 	# Voie d'attente : vire au rouge quand il ne reste qu'une place.
 	var tight: bool = _game.buffer.size() >= _game.buffer_size - 1
 	for b: int in places:
-		_place(_buffer_pos(b), PALETTE[0] if tight else INK)
+		_place(_buffer_pos(b), PALETTE[0] if tight else Color("b7adff"))
 	# Quais de départ : emplacements à remplir derrière chaque locomotive.
 	for s: int in _game.slots.size():
 		if s >= _slot_view.size() or _slot_view[s]["color"] == -1:
@@ -939,10 +1056,12 @@ func _draw() -> void:
 			_place(_slot_pos(s, k), PALETTE[_slot_view[s]["color"]])
 	# Trains à venir : couleur et longueur.
 	for p: int in _pending_view.size():
-		var center: Vector2 = Vector2(266.0 + p * 38.0, sz.y * 0.945)
-		draw_circle(center, 16.0, PALETTE[_pending_view[p][0]])
-		draw_string(font, center + Vector2(-16.0, 7.0), str(_pending_view[p][1]),
-			HORIZONTAL_ALIGNMENT_CENTER, 32.0, 20, Color.WHITE)
+		var center: Vector2 = Vector2(266.0 + p * 40.0, sz.y * 0.962)
+		draw_texture_rect(_tex["chip_%d" % int(_pending_view[p][0])], Rect2(center - Vector2(18.0, 17.0), Vector2(36.0, 39.6)), false)
+		draw_string_outline(font, center + Vector2(-16.0, 8.0), str(_pending_view[p][1]),
+			HORIZONTAL_ALIGNMENT_CENTER, 32.0, 21, 6, INK)
+		draw_string(font, center + Vector2(-16.0, 8.0), str(_pending_view[p][1]),
+			HORIZONTAL_ALIGNMENT_CENTER, 32.0, 21, Color.WHITE)
 
 
 # --- Vérification automatique --------------------------------------------------

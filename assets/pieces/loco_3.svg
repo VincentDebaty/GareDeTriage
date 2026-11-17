@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="184" viewBox="0 0 220 184">
+<defs>
+<linearGradient id="top" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#76cd84"/><stop offset="0.55" stop-color="#2fb344"/><stop offset="1" stop-color="#2ca243"/></linearGradient>
+<linearGradient id="side" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#268041"/><stop offset="1" stop-color="#1e513e"/></linearGradient>
+<linearGradient id="panel" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#278741"/><stop offset="1" stop-color="#48bc5a"/></linearGradient>
+<linearGradient id="rim" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.75"/><stop offset="0.6" stop-color="#ffffff" stop-opacity="0"/></linearGradient>
+<linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.62"/><stop offset="1" stop-color="#ffffff" stop-opacity="0.04"/></linearGradient>
+<radialGradient id="shadow" cx="0.5" cy="0.5" r="0.5"><stop offset="0.35" stop-color="#05021c" stop-opacity="0.55"/><stop offset="1" stop-color="#05021c" stop-opacity="0"/></radialGradient>
+<radialGradient id="wheel" cx="0.4" cy="0.35" r="0.7"><stop offset="0" stop-color="#5d55a3"/><stop offset="1" stop-color="#120d36"/></radialGradient>
+<radialGradient id="hub" cx="0.35" cy="0.3" r="0.8"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#9d95d8"/></radialGradient>
+<radialGradient id="dome" cx="0.35" cy="0.3" r="0.8"><stop offset="0" stop-color="#8dd598"/><stop offset="1" stop-color="#257840"/></radialGradient>
+<linearGradient id="glass" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#d8f4ff"/><stop offset="1" stop-color="#3fa9f0"/></linearGradient>
+<radialGradient id="lamp" cx="0.4" cy="0.35" r="0.7"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#ffcf3a"/></radialGradient>
+</defs>
+<ellipse cx="110.0" cy="150" rx="102.0" ry="24" fill="url(#shadow)"/>
+<rect x="20" y="24" width="180" height="112" rx="28" fill="url(#side)"/>
+<circle cx="56" cy="139" r="17" fill="url(#wheel)"/><circle cx="56" cy="139" r="7.1" fill="url(#hub)"/>
+<circle cx="112" cy="139" r="17" fill="url(#wheel)"/><circle cx="112" cy="139" r="7.1" fill="url(#hub)"/>
+<circle cx="168" cy="139" r="17" fill="url(#wheel)"/><circle cx="168" cy="139" r="7.1" fill="url(#hub)"/>
+<rect x="20" y="8" width="180" height="112" rx="28" fill="url(#top)"/>
+<rect x="22.5" y="10.5" width="175" height="107" rx="25.5" fill="none" stroke="url(#rim)" stroke-width="5"/>
+<rect x="32" y="44" width="50" height="60" rx="13" fill="#1b1642"/>
+<rect x="38" y="50" width="38" height="28" rx="8" fill="url(#glass)"/>
+<ellipse cx="48" cy="57" rx="7" ry="3.5" fill="#ffffff" fill-opacity="0.8"/>
+<circle cx="128" cy="72" r="29" fill="#1b1642"/>
+<circle cx="128" cy="72" r="23" fill="url(#dome)"/>
+<circle cx="128" cy="72" r="10" fill="#1b1642"/>
+<circle cx="182" cy="72" r="15" fill="#1b1642"/>
+<circle cx="182" cy="72" r="11" fill="url(#lamp)"/>
+<rect x="32" y="15" width="156" height="24" rx="12" fill="url(#gloss)"/>
+<ellipse cx="46" cy="26" rx="10" ry="5.5" fill="#ffffff" fill-opacity="0.9"/>
+</svg>
