@@ -199,6 +199,90 @@ func status() -> int:
 	return LOST
 
 
+# --- Jokers ------------------------------------------------------------------
+# Chaque joker renvoie false s'il n'a rien à faire (il n'est alors pas dépensé).
+# Appeler `settle` ensuite : un train complété part, les wagons en attente montent.
+
+## Détache un wagon de ses voisins de voie avant de le déplacer.
+func _detach(track: int, k: int) -> void:
+	linked[tracks[track][k]] = 0
+	if k > 0:
+		linked[tracks[track][k - 1]] = 0
+
+
+## Aimant : complète le train à quai auquel il manque le plus de wagons, en tirant ses
+## wagons des voies (les plus proches de la sortie d'abord).
+func joker_magnet() -> bool:
+	var slot: int = -1
+	var need: int = 0
+	for s: int in slots.size():
+		if slots[s]["color"] == -1:
+			continue
+		var missing: int = int(slots[s]["size"]) - slots[s]["ids"].size()
+		if missing > need:
+			need = missing
+			slot = s
+	if slot < 0:
+		return false
+	var moved: bool = false
+	while slots[slot]["ids"].size() < int(slots[slot]["size"]):
+		var best_t: int = -1
+		var best_k: int = -1
+		for t: int in tracks.size():
+			for k: int in tracks[t].size():
+				if colors[tracks[t][k]] == slots[slot]["color"]:
+					if best_t < 0 or k < best_k:
+						best_t = t
+						best_k = k
+					break
+		if best_t < 0:
+			break
+		_detach(best_t, best_k)
+		slots[slot]["ids"].append(tracks[best_t][best_k])
+		tracks[best_t].remove_at(best_k)
+		moved = true
+	return moved
+
+
+## Mélange : redistribue au hasard tous les wagons des voies (chaque voie garde sa
+## longueur). Les attelages sont défaits.
+func joker_shuffle(rng: RandomNumberGenerator) -> bool:
+	var ids: Array[int] = []
+	for t: Array in tracks:
+		for id: int in t:
+			ids.append(id)
+	if ids.size() < 2:
+		return false
+	for i: int in range(ids.size() - 1, 0, -1):
+		var j: int = rng.randi_range(0, i)
+		var tmp: int = ids[i]
+		ids[i] = ids[j]
+		ids[j] = tmp
+	var n: int = 0
+	for t: Array in tracks:
+		for k: int in t.size():
+			t[k] = ids[n]
+			linked[ids[n]] = 0
+			n += 1
+	return true
+
+
+## Renvoi : les wagons en attente repartent au fond des voies (les plus courtes d'abord),
+## la voie d'attente est vide.
+func joker_send_back() -> bool:
+	if buffer.is_empty():
+		return false
+	for id: int in buffer:
+		var shortest: int = 0
+		for t: int in tracks.size():
+			if tracks[t].size() < tracks[shortest].size():
+				shortest = t
+		linked[id] = 0
+		tracks[shortest].append(id)
+	buffer.clear()
+	return true
+
+
 ## Nombre de wagons encore en jeu (voies + attente + trains à quai).
 func wagons_in_play() -> int:
 	var n: int = buffer.size()

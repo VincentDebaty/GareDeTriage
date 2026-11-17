@@ -38,9 +38,13 @@ const DEPART_TIME := 0.6
 const LOCO_IN_TIME := 0.35
 ## Délai entre le début d'un départ et l'arrivée à quai de la locomotive suivante.
 const NEXT_TRAIN_DELAY := 0.12 + DEPART_TIME * 0.7 + LOCO_IN_TIME
-## Plafond d'états explorés pour savoir s'il reste une solution (valeur d'essai). Au-delà,
-## on ne sait pas : rien n'est annoncé.
-const CHECK_LIMIT := 20000
+## Jokers : aimant (complète un train à quai), mélange (rebat les wagons des voies),
+## renvoi (vide la voie d'attente vers le fond des voies).
+const JOKERS: Array[String] = ["magnet", "shuffle", "back"]
+const JOKER_NAMES: Array[String] = ["Aimant", "Mélange", "Renvoi"]
+## Réserve de départ (valeur d'essai). Un joker de plus à chaque gare réussie pour la
+## première fois avec trois étoiles.
+const JOKER_START: Array[int] = [1, 1, 1]
 const SAVE_PATH := "user://progress.json"
 ## À incrémenter quand le jeu de niveaux change : la progression repart alors de zéro.
 const SAVE_VERSION := 4
@@ -52,15 +56,6 @@ var _wagons: Dictionary = {}
 var _locos: Array[Node2D] = []
 ## Locomotives des trains à venir, garées sur la voie du bas (la première est la prochaine).
 var _queue: Array[Node2D] = []
-## États précédents, pour le bouton « Annuler ».
-var _history: Array[Game] = []
-## Nombre de coups joués au dernier moment où l'on sait que le niveau était encore faisable.
-var _safe_depth: int = 0
-## Numéro de la dernière vérification « reste-t-il une solution ? » ; les réponses plus
-## anciennes sont ignorées.
-var _check_seq: int = 0
-## Vérifications en cours, chacune dans son fil d'exécution.
-var _checks: Array[Thread] = []
 ## Wagons mystère déjà dévoilés (identifiant -> true).
 var _revealed: Dictionary = {}
 ## Ce que l'écran montre pour chaque quai ({color, size}) et pour les trains à venir
@@ -98,7 +93,11 @@ var _hint: Label
 var _stars_label: Label
 var _pending_label: Label
 var _restart: Button
-var _undo_button: Button
+## Boutons des jokers et leurs pastilles de quantité.
+var _joker_buttons: Array[Button] = []
+var _joker_badges: Array[Label] = []
+var _overlay_note: Label
+var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var _overlay: ColorRect
 var _overlay_label: Label
 var _overlay_button: Button
@@ -128,6 +127,7 @@ func _ready() -> void:
 	# Les lancements de vérification (options après « -- ») ne touchent pas à la sauvegarde.
 	_save_enabled = OS.get_cmdline_user_args().is_empty()
 	_load_progress()
+	_refresh_jokers()
 	_start_level(clampi(int(_progress["level"]), 0, _levels.size() - 1))
 	# Le jeu s'ouvre sur la carte de la ligne (sauf lors des vérifications automatiques).
 	if _save_enabled:
@@ -258,9 +258,31 @@ func _build_ui() -> void:
 	_pending_label = _label(22)
 	_pending_label.text = "Prochains trains"
 	_restart = _button("Recommencer", 26, func() -> void: _start_level(_level_index))
-	_undo_button = _button("Annuler", 26, _undo)
-	for c: Control in [_title, _stars_label, _hint, _pending_label, _restart, _undo_button]:
+	for c: Control in [_title, _stars_label, _hint, _pending_label, _restart]:
 		layer.add_child(c)
+	for i: int in JOKERS.size():
+		var b: Button = _button("", 20, _use_joker.bind(i))
+		_style_button(b, "green")
+		var icon: TextureRect = TextureRect.new()
+		icon.texture = load("res://assets/ui/joker_%s.svg" % JOKERS[i])
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		icon.position = Vector2(19.0, 7.0)
+		icon.size = Vector2(52.0, 48.0)
+		b.add_child(icon)
+		# Pastille rouge : nombre de jokers en réserve.
+		var badge: Label = _label(21)
+		badge.add_theme_stylebox_override("normal", _box(Color("e0322b"), 16))
+		badge.add_theme_constant_override("outline_size", 6)
+		badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		badge.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		badge.position = Vector2(62.0, 44.0)
+		badge.size = Vector2(32.0, 32.0)
+		b.add_child(badge)
+		layer.add_child(b)
+		_joker_buttons.append(b)
+		_joker_badges.append(badge)
 	_overlay = ColorRect.new()
 	_overlay.color = Color(0.1, 0.1, 0.15, 0.65)
 	_overlay.visible = false
@@ -269,6 +291,10 @@ func _build_ui() -> void:
 	_overlay_label.add_theme_font_size_override("font_size", 52)
 	_overlay_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_overlay.add_child(_overlay_label)
+	_overlay_note = _label(30)
+	_overlay_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_overlay_note.add_theme_color_override("font_color", GOLD)
+	_overlay.add_child(_overlay_note)
 	_star_row = Control.new()
 	_star_row.draw.connect(_draw_stars)
 	_overlay.add_child(_star_row)
@@ -313,10 +339,11 @@ func _layout_ui() -> void:
 	_map.size = sz
 	_restart.size = Vector2(220.0, 60.0)
 	_restart.position = Vector2(sz.x - 260.0, 62.0 + dy)
-	_undo_button.size = Vector2(220.0, 60.0)
-	_undo_button.position = Vector2(sz.x - 260.0, 134.0 + dy)
-	_stars_label.position = Vector2(40.0, 140.0 + dy)
-	_hint.position = Vector2(40.0, 196.0 + dy)
+	for i: int in _joker_buttons.size():
+		_joker_buttons[i].size = Vector2(90.0, 74.0)
+		_joker_buttons[i].position = Vector2(sz.x - 40.0 - (3 - i) * 90.0 - (2 - i) * 14.0, 130.0 + dy)
+	_stars_label.position = Vector2(40.0, 146.0 + dy)
+	_hint.position = Vector2(40.0, 212.0 + dy)
 	_hint.size = Vector2(sz.x - 80.0, 70.0)
 	# Légende de la voie des locomotives en attente, seulement s'il y a la place.
 	_pending_label.position = Vector2(26.0, _queue_y() - 68.0)
@@ -325,6 +352,8 @@ func _layout_ui() -> void:
 	_overlay.size = sz
 	_overlay_label.position = Vector2(0.0, sz.y * 0.30)
 	_overlay_label.size = Vector2(sz.x, 90.0)
+	_overlay_note.position = Vector2(0.0, sz.y * 0.30 - 56.0)
+	_overlay_note.size = Vector2(sz.x, 44.0)
 	_star_row.position = Vector2(sz.x / 2.0, sz.y * 0.43)
 	_overlay_button.size = Vector2(460.0, 100.0)
 	_overlay_button.position = Vector2((sz.x - 460.0) / 2.0, sz.y * 0.52)
@@ -353,8 +382,9 @@ func _on_resize() -> void:
 
 ## Affiche le panneau de fin. `stars` > 0 : les étoiles tombent une à une.
 ## `alt` : texte du bouton secondaire.
-func _show_overlay(text: String, button: String, stars: int, alt: String) -> void:
+func _show_overlay(text: String, button: String, stars: int, alt: String, note: String = "") -> void:
 	_overlay_label.text = text
+	_overlay_note.text = note
 	_overlay_button.text = button
 	_overlay_alt.text = alt
 	_stars_total = stars
@@ -386,15 +416,20 @@ func _draw_stars() -> void:
 func _on_overlay_button() -> void:
 	if _game.status() == Game.WON:
 		_start_level((_level_index + 1) % _levels.size())
+	elif _has_jokers():
+		# Gare bloquée : le panneau s'efface pour laisser choisir un joker.
+		_overlay.visible = false
 	else:
-		_rewind()
+		_start_level(_level_index)
 
 
 func _on_overlay_alt() -> void:
 	if _game.status() == Game.WON:
 		_open_map()
-	else:
+	elif _has_jokers():
 		_start_level(_level_index)
+	else:
+		_open_map()
 
 
 # --- Géométrie ---------------------------------------------------------------
@@ -497,9 +532,6 @@ func _start_level(index: int) -> void:
 	_gen += 1
 	_level_index = index
 	_overlay.visible = false
-	_history.clear()
-	_safe_depth = 0
-	_check_seq += 1
 	_revealed.clear()
 	_game = Game.new()
 	_game.load_level(_levels[index])
@@ -784,13 +816,11 @@ func _take(track: int) -> void:
 	if _game.status() != Game.PLAYING or _game.tracks[track].is_empty():
 		return
 	var head: Node2D = _wagons[_game.tracks[track][0]]
-	var before: Game = _game.clone() as Game
 	var ev: Dictionary = _game.take(track)
 	if ev.is_empty():
 		_shake(head)
 		_sfx.play("nope")
 		return
-	_history.append(before)
 	# La règle est appliquée tout de suite, jusqu'au bout des mouvements automatiques.
 	# Les animations sont seulement programmées : elles ne bloquent jamais la saisie.
 	Input.vibrate_handheld(15)
@@ -848,8 +878,6 @@ func _take(track: int) -> void:
 		get_tree().create_timer(maxf(next_start, last_arrival) + 0.5).timeout.connect(func() -> void:
 			if gen == _gen:
 				_finish())
-	else:
-		_check_dead_end()
 
 
 ## Arrivée d'un wagon « +1 » : il disparaît et laisse une place d'attente de plus.
@@ -908,83 +936,65 @@ func _finish() -> void:
 			_celebrate()
 		Game.LOST:
 			_sfx.play("lose")
-			_show_overlay("Gare bloquée !", "Reprendre avant l'erreur", 0, "Recommencer le niveau")
+			if _has_jokers():
+				_show_overlay("Gare bloquée !", "Utiliser un joker", 0, "Recommencer le niveau")
+			else:
+				_show_overlay("Gare bloquée !", "Recommencer le niveau", 0, "Voir la carte")
 
 
-## Vérifie en arrière-plan s'il reste une solution depuis la position actuelle. Si l'on est
-## sûr que non, le panneau « Voie sans issue » s'affiche sans attendre le dernier coup possible.
-func _check_dead_end() -> void:
-	_check_seq += 1
-	var seq: int = _check_seq
-	var depth: int = _history.size()
-	var snapshot: Game = _game.clone() as Game
-	var thread: Thread = Thread.new()
-	_checks.append(thread)
-	thread.start(func() -> void:
-		var r: Dictionary = Solver.solve(snapshot, CHECK_LIMIT)
-		_on_checked.call_deferred(thread, seq, depth, bool(r["solvable"]), bool(r["aborted"])))
+# --- Jokers ------------------------------------------------------------------
+
+## Réserve de jokers, dans l'ordre de JOKERS. Elle se garde d'une partie à l'autre.
+func _jokers() -> Array:
+	var stock: Variant = _progress.get("jokers")
+	if not (stock is Array) or (stock as Array).size() != JOKERS.size():
+		_progress["jokers"] = JOKER_START.duplicate()
+	return _progress["jokers"]
 
 
-func _exit_tree() -> void:
-	for thread: Thread in _checks:
-		thread.wait_to_finish()
-	_checks.clear()
+func _has_jokers() -> bool:
+	for n: Variant in _jokers():
+		if int(n) > 0:
+			return true
+	return false
 
 
-func _on_checked(thread: Thread, seq: int, depth: int, solvable: bool, aborted: bool) -> void:
-	thread.wait_to_finish()
-	_checks.erase(thread)
-	if seq != _check_seq:
+func _refresh_jokers() -> void:
+	for i: int in _joker_buttons.size():
+		var n: int = int(_jokers()[i])
+		_joker_badges[i].text = str(n)
+		_joker_buttons[i].modulate = Color.WHITE if n > 0 else Color(0.55, 0.55, 0.68)
+
+
+## Dépense le joker `i`, s'il a quelque chose à faire. Le plateau est redessiné d'un coup.
+func _use_joker(i: int) -> void:
+	if _game == null or _game.status() == Game.WON or _overlay.visible:
 		return
-	if solvable:
-		_safe_depth = depth
-		return
-	if aborted:
-		return
-	# Laisse le dernier wagon arriver avant d'annoncer la mauvaise nouvelle.
-	get_tree().create_timer(0.7).timeout.connect(func() -> void:
-		if seq == _check_seq and _game.status() == Game.PLAYING and not _overlay.visible:
-			_sfx.play("lose")
-			_show_overlay("Voie sans issue !", "Reprendre avant l'erreur", 0, "Recommencer le niveau"))
-
-
-## Revient au dernier moment où le niveau était encore faisable.
-func _rewind() -> void:
-	if _history.is_empty():
+	var applied: bool = false
+	if int(_jokers()[i]) > 0:
+		match i:
+			0:
+				applied = _game.joker_magnet()
+			1:
+				applied = _game.joker_shuffle(_rng)
+			2:
+				applied = _game.joker_send_back()
+	if not applied:
 		_sfx.play("nope")
 		return
-	var found: int = mini(_safe_depth, _history.size() - 1)
-	# Les positions dont la vérification n'avait pas abouti sont réexaminées, de la plus récente
-	# à la plus ancienne.
-	for d: int in range(_history.size() - 1, found, -1):
-		if Solver.solve(_history[d], CHECK_LIMIT)["solvable"]:
-			found = d
-			break
+	_jokers()[i] = int(_jokers()[i]) - 1
+	_save_progress()
+	_refresh_jokers()
 	_gen += 1
-	_check_seq += 1
-	_game = _history[found]
-	_history.resize(found)
-	_safe_depth = found
-	_overlay.visible = false
+	_game.settle()
 	_rebuild()
-	_sfx.play("undo")
-
-
-## Revient à l'état d'avant le dernier coup.
-func _undo() -> void:
-	if _history.is_empty():
-		_sfx.play("nope")
-		return
-	_gen += 1
-	_game = _history.pop_back()
-	_overlay.visible = false
-	_rebuild()
-	_sfx.play("undo")
-	if _history.size() > _safe_depth:
-		# Position pas encore reconnue comme faisable : on revérifie.
-		_check_dead_end()
-	else:
-		_check_seq += 1
+	_sfx.play("star")
+	Input.vibrate_handheld(30)
+	if _game.status() != Game.PLAYING:
+		var gen: int = _gen
+		get_tree().create_timer(0.6).timeout.connect(func() -> void:
+			if gen == _gen:
+				_finish())
 
 
 func _smoke() -> CPUParticles2D:
@@ -1010,6 +1020,12 @@ func _celebrate() -> void:
 	var stars: int = clampi(3 - (_game.peak_buffer - par), 1, 3)
 	_sfx.play("win")
 	var key: String = str(_level_index)
+	var note: String = ""
+	if stars == 3 and int(_progress["stars"].get(key, 0)) < 3:
+		var earned: int = _level_index % JOKERS.size()
+		_jokers()[earned] = int(_jokers()[earned]) + 1
+		_refresh_jokers()
+		note = "Joker gagné : %s" % JOKER_NAMES[earned]
 	_progress["stars"][key] = maxi(stars, int(_progress["stars"].get(key, 0)))
 	_progress["level"] = (_level_index + 1) % _levels.size()
 	_progress["reached"] = maxi(_reached(), mini(_level_index + 1, _levels.size() - 1))
@@ -1038,9 +1054,9 @@ func _celebrate() -> void:
 	confetti.emitting = true
 	get_tree().create_timer(3.0).timeout.connect(fx.queue_free)
 	if _level_index == _levels.size() - 1:
-		_show_overlay("Terminus !", "Rejouer depuis le début", stars, "Voir la carte")
+		_show_overlay("Terminus !", "Rejouer depuis le début", stars, "Voir la carte", note)
 	else:
-		_show_overlay("Gare desservie !", "Gare suivante", stars, "Voir la carte")
+		_show_overlay("Gare desservie !", "Gare suivante", stars, "Voir la carte", note)
 
 
 # --- Décor -------------------------------------------------------------------
@@ -1219,7 +1235,7 @@ func _draw() -> void:
 # --- Vérification automatique --------------------------------------------------
 
 ## Options après « -- » : --level=N, --autoplay=K (K coups du solveur), --pace=S (secondes
-## entre deux touches, 0 = rafale), --undo=N (N annulations ensuite), --wait=S (attente
+## entre deux touches, 0 = rafale), --joker=I (utilise ensuite le joker I), --wait=S (attente
 ## avant capture), --map=1 (ouvre la carte de la ligne), --shot=chemin.png.
 func _debug_hook() -> void:
 	var opts: Dictionary = {}
@@ -1246,16 +1262,12 @@ func _debug_hook() -> void:
 				_take(t)
 				break
 		await _wait(1.6)
-	print("coups joués : %d, panneau : %s (%s)" % [_history.size(), _overlay.visible, _overlay_label.text])
-	if opts.has("rewind"):
+	if opts.has("joker"):
 		await _wait(0.5)
-		_rewind()
-		print("après reprise : %d coups, faisable : %s" % [_history.size(), Solver.solve(_game)["solvable"]])
+		_overlay.visible = false
+		_use_joker(int(opts["joker"]))
 	if opts.has("map"):
 		_open_map()
-	for n: int in int(opts.get("undo", "0")):
-		await _wait(0.4)
-		_undo()
 	if opts.has("shot"):
 		await _wait(float(opts.get("wait", "2.5")))
 		get_viewport().get_texture().get_image().save_png(opts["shot"])

@@ -249,6 +249,32 @@ def wave():
     return doc(128, 60, body)
 
 
+def joker(kind):
+    """Icône d'un joker (96 x 96, affichée en 48 x 48), blanche cernée de sombre."""
+    edge = 'stroke="#1b1642" stroke-linejoin="round" stroke-linecap="round"'
+    if kind == "magnet":
+        horseshoe = "M16 14 v36 a32 32 0 0 0 64 0 v-36 h-22 v36 a10 10 0 0 1 -20 0 v-36 z"
+        body = f'<path d="{horseshoe}" fill="#f0412b" stroke-width="7" {edge}/>'
+        body += f'<rect x="16" y="14" width="22" height="16" fill="#ffffff" stroke-width="7" {edge}/>'
+        body += f'<rect x="58" y="14" width="22" height="16" fill="#ffffff" stroke-width="7" {edge}/>'
+    elif kind == "shuffle":
+        lines = ["M12 30 h14 c22 0 20 36 42 36 h8", "M12 66 h14 c22 0 20 -36 42 -36 h8"]
+        heads = ["66,52 88,66 66,80", "66,16 88,30 66,44"]
+        body = "".join(f'<path d="{d}" fill="none" stroke-width="20" {edge}/>' for d in lines)
+        body += "".join(f'<polygon points="{h}" fill="#1b1642" stroke-width="8" {edge}/>' for h in heads)
+        body += "".join(f'<path d="{d}" fill="none" stroke="#ffffff" stroke-width="10" stroke-linecap="round"/>' for d in lines)
+        body += "".join(f'<polygon points="{h}" fill="#ffffff"/>' for h in heads)
+    else:
+        # Renvoi : une flèche qui fait demi-tour vers le haut des voies.
+        line = "M22 80 h34 a22 22 0 0 0 22 -22 v-26"
+        head = "58,36 78,10 98,36"
+        body = f'<path d="{line}" fill="none" stroke-width="22" {edge}/>'
+        body += f'<polygon points="{head}" fill="#1b1642" stroke-width="8" {edge}/>'
+        body += f'<path d="{line}" fill="none" stroke="#ffffff" stroke-width="12" stroke-linecap="round"/>'
+        body += f'<polygon points="{head}" fill="#ffffff"/>'
+    return doc(104, 96, body)
+
+
 def write(folder, name, text):
     os.makedirs(folder, exist_ok=True)
     open(os.path.join(folder, name), "w").write(text)
@@ -271,6 +297,8 @@ def main():
     write(UI, "tree.svg", tree())
     write(UI, "peak.svg", peak())
     write(UI, "wave.svg", wave())
+    for kind in ("magnet", "shuffle", "back"):
+        write(UI, f"joker_{kind}.svg", joker(kind))
     for name, c in BUTTONS.items():
         write(UI, f"button_{name}.svg", button(c, False))
         write(UI, f"button_{name}_pressed.svg", button(c, True))

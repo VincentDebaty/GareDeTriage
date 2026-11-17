@@ -15,6 +15,7 @@ func _init() -> void:
 	_test_train_sizes_and_clone()
 	_test_coupled_wagons()
 	_test_bonus_place()
+	_test_jokers()
 	_test_levels_are_consistent_and_solvable()
 	_test_solution_replay_conserves_wagons()
 	print("%d vérifications réussies, %d en échec" % [_passed, _failed])
@@ -176,6 +177,54 @@ func _test_levels_are_consistent_and_solvable() -> void:
 		g = Game.new()
 		g.load_level(tight)
 		_check(Solver.solve(g)["solvable"], "niveau %d : trois étoiles atteignables" % (n + 1))
+
+
+func _test_jokers() -> void:
+	# Aimant : complète le train à quai en tirant ses wagons du milieu des voies.
+	var g: Game = Game.new()
+	g.load_level({"tracks": [[1, 0, 1], [1, 0, 0]], "links": [[1, 0, 0], [0, 0, 0]],
+		"trains": [0, 1], "buffer": 1, "slots": 1})
+	var total: int = g.wagons_in_play()
+	_check(g.joker_magnet(), "l'aimant trouve des wagons")
+	_check(g.slots[0]["ids"].size() == 3 and g.wagons_in_play() == total, "l'aimant complète le train sans perdre de wagon")
+	_check(g.linked[g.tracks[0][0]] == 0, "l'aimant défait l'attelage du wagon retiré")
+	g.settle()
+	_check(g.slots[0]["color"] == 1 and g.tracks[0].size() == 2 and g.tracks[1].size() == 1, "le train complété part, le suivant arrive")
+	g.take(0)
+	g.take(0)
+	g.take(1)
+	g.settle()
+	_check(g.status() == Game.WON, "la partie se termine après l'aimant")
+	_check(not g.joker_magnet(), "l'aimant ne fait rien sans train à quai")
+	# Renvoi : la voie d'attente se vide vers le fond des voies les plus courtes.
+	g = Game.new()
+	g.load_level({"tracks": [[1, 1, 0, 0, 0], [1]], "trains": [0, 1], "buffer": 2, "slots": 1})
+	_check(not g.joker_send_back(), "le renvoi ne fait rien si personne n'attend")
+	g.take(0)
+	g.take(0)
+	total = g.wagons_in_play()
+	_check(g.joker_send_back(), "le renvoi vide la voie d'attente")
+	_check(g.buffer.is_empty() and g.tracks[1].size() == 3 and g.wagons_in_play() == total, "les wagons repartent au fond de la voie la plus courte")
+	# Mélange : mêmes wagons, mêmes longueurs de voie, plus d'attelage.
+	g = Game.new()
+	g.load_level({"tracks": [[0, 1, 0, 1], [1, 0]], "links": [[1, 0, 0, 0], [0, 0]],
+		"trains": [0, 1], "buffer": 2, "slots": 1})
+	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	rng.seed = 5
+	var before: Array = []
+	for t: Array in g.tracks:
+		before.append_array(t)
+	before.sort()
+	_check(g.joker_shuffle(rng), "le mélange s'applique")
+	var after: Array = []
+	var unlinked: bool = true
+	for t: Array in g.tracks:
+		after.append_array(t)
+		for id: int in t:
+			unlinked = unlinked and g.linked[id] == 0
+	after.sort()
+	_check(before == after and g.tracks[0].size() == 4 and g.tracks[1].size() == 2, "le mélange garde les wagons et la longueur des voies")
+	_check(unlinked, "le mélange défait les attelages")
 
 
 func _test_solution_replay_conserves_wagons() -> void:
