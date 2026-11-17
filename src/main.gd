@@ -35,6 +35,10 @@ const ROLL_TIME := 0.38
 const CASCADE_GAP := 0.14
 const PAIR_GAP := 0.07
 const DEPART_TIME := 0.6
+## Jokers : durée du vol d'un wagon, écart entre deux wagons, durée du mélange.
+const FLY_TIME := 0.42
+const FLY_GAP := 0.09
+const SHUFFLE_TIME := 0.5
 const LOCO_IN_TIME := 0.35
 ## Délai entre le début d'un départ et l'arrivée à quai de la locomotive suivante.
 const NEXT_TRAIN_DELAY := 0.12 + DEPART_TIME * 0.7 + LOCO_IN_TIME
@@ -852,10 +856,20 @@ func _take(track: int) -> void:
 			_roll(w, _route_from_track(track, 0), _buffer_pos(_game.buffer.find(id)), delay,
 				Callable(), Callable())
 	_sfx.play("pop" if boarded else "wait")
-	# Enchaînement : les wagons en attente montent en cascade, un train complet part
-	# dès que son dernier wagon est attelé.
-	var next_start: float = CASCADE_GAP
-	var last_arrival: float = ROLL_TIME + PAIR_GAP * (taken.size() - 1)
+	var end_time: float = _cascade(CASCADE_GAP, ROLL_TIME + PAIR_GAP * (taken.size() - 1))
+	_relayout(MOVE_TIME, taken)
+	if _game.status() != Game.PLAYING:
+		var gen: int = _gen
+		get_tree().create_timer(end_time + 0.5).timeout.connect(func() -> void:
+			if gen == _gen:
+				_finish())
+
+
+## Enchaînement des mouvements automatiques : les wagons en attente montent en cascade, un
+## train complet part dès que son dernier wagon est attelé. `next_start` : moment du premier
+## mouvement ; `last_arrival` : moment où le dernier wagon déjà en route arrive.
+## Renvoie le moment où tout est terminé.
+func _cascade(next_start: float, last_arrival: float) -> float:
 	var chain: int = 0
 	while true:
 		var step: Dictionary = _game.settle_step()
@@ -872,12 +886,7 @@ func _take(track: int) -> void:
 			# Les wagons en attente pour le train suivant arrivent en même temps que lui.
 			next_start = start + NEXT_TRAIN_DELAY - ROLL_TIME
 			last_arrival = start + NEXT_TRAIN_DELAY
-	_relayout(MOVE_TIME, taken)
-	if _game.status() != Game.PLAYING:
-		var gen: int = _gen
-		get_tree().create_timer(maxf(next_start, last_arrival) + 0.5).timeout.connect(func() -> void:
-			if gen == _gen:
-				_finish())
+	return maxf(next_start, last_arrival)
 
 
 ## Arrivée d'un wagon « +1 » : il disparaît et laisse une place d'attente de plus.
@@ -966,33 +975,122 @@ func _refresh_jokers() -> void:
 		_joker_buttons[i].modulate = Color.WHITE if n > 0 else Color(0.55, 0.55, 0.68)
 
 
-## Dépense le joker `i`, s'il a quelque chose à faire. Le plateau est redessiné d'un coup.
+## Vol d'un wagon déplacé par un joker : il se soulève, file en ligne droite jusqu'à
+## `target` en pivotant vers `end_heading`, puis se repose.
+func _fly(node: Node2D, target: Vector2, end_heading: float, delay: float, on_arrive: Callable) -> void:
+	_stop_move(node)
+	var tw: Tween = node.create_tween()
+	node.set_meta("move", tw)
+	if delay > 0.0:
+		tw.tween_interval(delay)
+	tw.tween_callback(func() -> void:
+		node.z_index = 6
+		_sfx.play("pop", 1.2)
+		var lift: Tween = node.create_tween()
+		lift.tween_property(node, "scale", Vector2(1.3, 1.3), FLY_TIME * 0.4).set_ease(Tween.EASE_OUT)
+		lift.tween_property(node, "scale", Vector2.ONE, FLY_TIME * 0.6).set_ease(Tween.EASE_IN))
+	tw.tween_property(node, "position", target, FLY_TIME).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	tw.parallel().tween_property(node, "heading", end_heading, FLY_TIME)
+	tw.tween_callback(func() -> void:
+		node.position = target
+		node.z_index = 0
+		node.remove_meta("move")
+		if on_arrive.is_valid():
+			on_arrive.call())
+
+
+## Dépense le joker `i`, s'il a quelque chose à faire, et anime son effet.
 func _use_joker(i: int) -> void:
 	if _game == null or _game.status() == Game.WON or _overlay.visible:
 		return
+	if int(_jokers()[i]) <= 0:
+		_sfx.play("nope")
+		return
+	# État d'avant, pour savoir quels wagons le joker déplace et d'où ils partent.
+	var loaded: Array[int] = []
+	for slot: Dictionary in _game.slots:
+		loaded.append(slot["ids"].size())
+	var waiting: Array[int] = _game.buffer.duplicate()
+	var from: Dictionary = {}
+	for id: int in _wagons:
+		from[id] = _wagons[id].position
 	var applied: bool = false
-	if int(_jokers()[i]) > 0:
-		match i:
-			0:
-				applied = _game.joker_magnet()
-			1:
-				applied = _game.joker_shuffle(_rng)
-			2:
-				applied = _game.joker_send_back()
+	match i:
+		0:
+			applied = _game.joker_magnet()
+		1:
+			applied = _game.joker_shuffle(_rng)
+		2:
+			applied = _game.joker_send_back()
 	if not applied:
 		_sfx.play("nope")
 		return
 	_jokers()[i] = int(_jokers()[i]) - 1
 	_save_progress()
 	_refresh_jokers()
-	_gen += 1
-	_game.settle()
-	_rebuild()
 	_sfx.play("star")
 	Input.vibrate_handheld(30)
+	# Le bouton se tasse puis rebondit.
+	var pressed: Button = _joker_buttons[i]
+	pressed.pivot_offset = pressed.size / 2.0
+	pressed.scale = Vector2(0.8, 0.8)
+	pressed.create_tween().tween_property(pressed, "scale", Vector2.ONE, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	var end_time: float = 0.0
+	match i:
+		0:
+			# Aimant : les wagons quittent leur voie un à un et filent s'atteler au train.
+			var flights: Array = []
+			for s: int in _game.slots.size():
+				var ids: Array = _game.slots[s]["ids"]
+				for k: int in range(loaded[s], ids.size()):
+					flights.append([_wagons[ids[k]], _slot_pos(s, k)])
+				if ids.size() > loaded[s]:
+					_switch_lane = s + 1
+			var last: float = FLY_TIME + FLY_GAP * (flights.size() - 1)
+			end_time = _cascade(last, last)
+			_relayout(MOVE_TIME)
+			for n: int in flights.size():
+				var w: Node2D = flights[n][0]
+				w.visible = true
+				w.modulate.a = 1.0
+				w.coupled = false
+				_fly(w, flights[n][1], 0.0, FLY_GAP * n, _couple.bind(w))
+		1:
+			# Mélange : tous les wagons des voies sautent à leur nouvelle place.
+			_relayout(SHUFFLE_TIME)
+			var n: int = 0
+			for track: Array in _game.tracks:
+				for k: int in mini(track.size(), TRACK_ROWS):
+					var w: Node2D = _wagons[track[k]]
+					w.z_index = 1 + n % 4
+					var hop: Tween = w.create_tween()
+					hop.tween_property(w, "scale", Vector2(1.22, 1.22), SHUFFLE_TIME * 0.5).set_ease(Tween.EASE_OUT)
+					hop.tween_property(w, "scale", Vector2.ONE, SHUFFLE_TIME * 0.5).set_ease(Tween.EASE_IN)
+					hop.tween_callback(func() -> void: w.z_index = 0)
+					n += 1
+			end_time = SHUFFLE_TIME
+		2:
+			# Renvoi : les wagons en attente s'envolent vers le fond des voies.
+			_relayout(MOVE_TIME)
+			for n: int in waiting.size():
+				var id: int = waiting[n]
+				var w: Node2D = _wagons[id]
+				for t: int in _game.tracks.size():
+					var k: int = _game.tracks[t].find(id)
+					if k < 0:
+						continue
+					w.position = from[id]
+					w.visible = true
+					w.modulate.a = 1.0
+					# Au-delà de ce que l'écran montre, le wagon disparaît en haut de la voie.
+					var hidden: bool = k >= TRACK_ROWS
+					_fly(w, _track_pos(t, mini(k, TRACK_ROWS)), PI / 2.0, FLY_GAP * n, func() -> void:
+						w.visible = not hidden
+						queue_redraw())
+			end_time = FLY_TIME + FLY_GAP * (waiting.size() - 1)
 	if _game.status() != Game.PLAYING:
 		var gen: int = _gen
-		get_tree().create_timer(0.6).timeout.connect(func() -> void:
+		get_tree().create_timer(end_time + 0.5).timeout.connect(func() -> void:
 			if gen == _gen:
 				_finish())
 
