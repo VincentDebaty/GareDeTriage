@@ -161,8 +161,16 @@ func _test_levels_are_consistent_and_solvable() -> void:
 		g.load_level(level)
 		_check(Solver.solve(g)["solvable"], "niveau %d : faisable" % (n + 1))
 		var bonus: int = 0
+		var middle: bool = true
 		for track: Variant in level["tracks"]:
-			bonus += track.count(float(Game.BONUS)) + track.count(Game.BONUS)
+			var here: int = 0
+			for k: int in track.size():
+				if int(track[k]) == Game.BONUS:
+					here += 1
+					middle = middle and k >= 1 and k <= track.size() - 2
+			middle = middle and here <= 1
+			bonus += here
+		_check(middle, "niveau %d : wagon +1 en milieu de voie, un par voie au plus" % (n + 1))
 		var tight: Dictionary = level.duplicate()
 		tight["buffer"] = int(level["par"]) - bonus
 		g = Game.new()

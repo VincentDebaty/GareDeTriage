@@ -21,9 +21,12 @@ const BG := Color("f3ead7")
 const RAIL := Color("8a7968")
 const INK := Color("2b2d42")
 const GOLD := Color("f2b705")
+## Réseau : abscisse de la voie en échelle (bord gauche) et rayon des courbes.
+const LADDER_X := 62.0
+const BEND := 36.0
 ## Durées d'essai des animations, en secondes.
 const MOVE_TIME := 0.16
-const ROLL_TIME := 0.26
+const ROLL_TIME := 0.38
 const CASCADE_GAP := 0.14
 const PAIR_GAP := 0.07
 const DEPART_TIME := 0.6
@@ -51,6 +54,8 @@ var _pending_view: Array = []
 ## Nombre de places d'attente dessinées : une place ajoutée par un wagon « +1 »
 ## n'apparaît qu'à l'arrivée de ce wagon.
 var _buffer_view: int = 0
+## Dernière voie de destination empruntée (0 = attente, 1.. = quais) : oriente les aiguillages.
+var _switch_lane: int = -1
 ## Numéros d'ordre des mises à jour de ces vues : en jouant très vite, deux animations
 ## peuvent se terminer dans le désordre ; on n'applique jamais un état plus ancien que
 ## celui déjà affiché (par quai, et pour la liste des trains à venir).
@@ -338,16 +343,58 @@ func _track_rect(t: int) -> Rect2:
 	return Rect2(_track_x(t) - width / 2.0, top, width, _head_y() + 44.0 - top)
 
 
+## Ordonnée de la voie collectrice, où se rejoignent les voies d'arrivée.
+func _collector_y() -> float:
+	return _head_y() + 82.0
+
+
+## Ordonnée d'une voie de destination : 0 = attente, 1.. = quais.
+func _lane_y(lane: int) -> float:
+	return maxf(_size().y * 0.72, _collector_y() + 2.0 * BEND) + lane * _size().y * 0.08
+
+
 func _buffer_pos(b: int) -> Vector2:
-	return Vector2(_size().x / 2.0 + (b - (_game.buffer_size - 1) / 2.0) * STEP, _size().y * 0.69)
+	return Vector2(LADDER_X + 78.0 + b * STEP, _lane_y(0))
 
 
 func _loco_pos(slot: int) -> Vector2:
-	return Vector2(_size().x - 120.0, _size().y * (0.785 + 0.085 * slot))
+	return Vector2(_size().x - 120.0, _lane_y(slot + 1))
 
 
 func _slot_pos(slot: int, k: int) -> Vector2:
 	return _loco_pos(slot) - Vector2(STEP * (k + 1) + 4.0, 0.0)
+
+
+## Angles du trajet d'une voie d'arrivée vers une voie de destination : la collectrice,
+## puis l'échelle.
+func _route_from_track(track: int, lane: int) -> Array[Vector2]:
+	return [Vector2(_track_x(track), _collector_y()), Vector2(LADDER_X, _collector_y()),
+		Vector2(LADDER_X, _lane_y(lane))]
+
+
+## Angles du trajet de la voie d'attente vers un quai : retour à l'échelle, puis le quai.
+func _route_from_buffer(lane: int) -> Array[Vector2]:
+	return [Vector2(LADDER_X, _lane_y(0)), Vector2(LADDER_X, _lane_y(lane))]
+
+
+## Ligne brisée dont les angles sont arrondis en courbes de rayon BEND (moins si les
+## segments voisins sont trop courts).
+func _rounded(points: Array[Vector2]) -> PackedVector2Array:
+	var out: PackedVector2Array = PackedVector2Array()
+	var last: int = points.size() - 1
+	out.append(points[0])
+	for i: int in range(1, last):
+		var len_in: float = points[i].distance_to(points[i - 1]) * (0.5 if i - 1 > 0 else 1.0)
+		var len_out: float = points[i].distance_to(points[i + 1]) * (0.5 if i + 1 < last else 1.0)
+		var r: float = minf(BEND, minf(len_in, len_out))
+		if r < 1.0:
+			continue
+		var a: Vector2 = points[i] + (points[i - 1] - points[i]).normalized() * r
+		var b: Vector2 = points[i] + (points[i + 1] - points[i]).normalized() * r
+		for k: int in 9:
+			out.append(a.bezier_interpolate(a.lerp(points[i], 0.55), b.lerp(points[i], 0.55), b, k / 8.0))
+	out.append(points[last])
+	return out
 
 
 # --- Partie ------------------------------------------------------------------
@@ -360,6 +407,7 @@ func _start_level(index: int) -> void:
 	_revealed.clear()
 	_game = Game.new()
 	_game.load_level(_levels[index])
+	_switch_lane = -1
 	_rebuild()
 	_title.text = "%d · %s" % [index + 1, _line["stations"][index]]
 	RenderingServer.set_default_clear_color(Color(str(_region(index)["game"])))
@@ -462,6 +510,8 @@ func _stop_move(node: Node2D) -> void:
 		if old != null and old.is_valid():
 			old.kill()
 		node.remove_meta("move")
+		node.remove_meta("roll_target")
+		node.z_index = 0
 
 
 ## Glissement simple en ligne droite (décalage d'une voie, resserrement de l'attente).
@@ -475,24 +525,36 @@ func _move(node: Node2D, target: Vector2, duration: float) -> void:
 		node.set_meta("move", tw)
 
 
-## Fait rouler un wagon jusqu'à `target` : il descend sa voie, puis longe le quai.
+## Fait rouler un wagon jusqu'à `target` en suivant les rails : `corners` sont les angles
+## du trajet (voir `_route_from_track` et `_route_from_buffer`).
 ## `on_start` et `on_arrive` sont appelés au départ et à l'arrivée (Callable() pour rien).
-func _roll(node: Node2D, target: Vector2, delay: float, on_start: Callable, on_arrive: Callable) -> void:
+func _roll(node: Node2D, corners: Array[Vector2], target: Vector2, delay: float,
+		on_start: Callable, on_arrive: Callable) -> void:
 	_stop_move(node)
-	var dy: float = absf(target.y - node.position.y)
-	var dx: float = absf(target.x - node.position.x)
-	var total: float = maxf(dx + dy, 1.0)
+	var curve: Curve2D = Curve2D.new()
 	var tw: Tween = node.create_tween()
+	node.set_meta("move", tw)
+	node.set_meta("roll_target", target)
 	if delay > 0.0:
 		tw.tween_interval(delay)
 	tw.tween_callback(func() -> void:
 		node.z_index = 5
+		# Le trajet part de là où le wagon se trouve vraiment à cet instant.
+		var points: Array[Vector2] = [node.position]
+		points.append_array(corners)
+		points.append(target)
+		for p: Vector2 in _rounded(points):
+			curve.add_point(p)
 		if on_start.is_valid():
 			on_start.call())
-	tw.tween_property(node, "position:y", target.y, maxf(0.01, ROLL_TIME * dy / total)).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
-	tw.tween_property(node, "position:x", target.x, maxf(0.01, ROLL_TIME * dx / total)).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_method(func(t: float) -> void:
+		node.position = curve.sample_baked(t * curve.get_baked_length()),
+		0.0, 1.0, ROLL_TIME).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	tw.tween_callback(func() -> void:
+		node.position = target
 		node.z_index = 0
+		node.remove_meta("move")
+		node.remove_meta("roll_target")
 		if on_arrive.is_valid():
 			on_arrive.call())
 
@@ -530,8 +592,12 @@ func _relayout(duration: float, skip: Array = []) -> void:
 			if k == 0 and w.masked:
 				_reveal(id, duration > 0.0)
 	for b: int in _game.buffer.size():
-		if not skip.has(_game.buffer[b]):
-			_move(_wagons[_game.buffer[b]], _buffer_pos(b), duration)
+		var waiting: Node2D = _wagons[_game.buffer[b]]
+		# Un wagon qui roule déjà vers cette place finit son trajet sur les rails.
+		var rolling: bool = duration > 0.0 and waiting.has_meta("roll_target") \
+				and waiting.get_meta("roll_target") == _buffer_pos(b)
+		if not skip.has(_game.buffer[b]) and not rolling:
+			_move(waiting, _buffer_pos(b), duration)
 	# Les wagons à quai sont placés par leurs propres animations ; on ne les
 	# repositionne ici que pour un placement immédiat (changement de taille d'écran).
 	if duration <= 0.0:
@@ -598,12 +664,18 @@ func _take(track: int) -> void:
 			# Le wagon « +1 » roule au bout de la voie d'attente et y devient une place.
 			boarded = true
 			_wagons.erase(id)
-			_roll(w, _buffer_pos(_game.buffer_size - 1), delay, Callable(), _become_place.bind(w, _game.buffer_size))
+			_switch_lane = 0
+			_roll(w, _route_from_track(track, 0), _buffer_pos(_game.buffer_size - 1), delay,
+				Callable(), _become_place.bind(w, _game.buffer_size))
 		elif slot >= 0:
 			boarded = true
-			_roll(w, _slot_pos(slot, _game.slots[slot]["ids"].find(id)), delay, Callable(), _couple.bind(w))
+			_switch_lane = slot + 1
+			_roll(w, _route_from_track(track, slot + 1),
+				_slot_pos(slot, _game.slots[slot]["ids"].find(id)), delay, Callable(), _couple.bind(w))
 		else:
-			_roll(w, _buffer_pos(_game.buffer.find(id)), delay, Callable(), Callable())
+			_switch_lane = 0
+			_roll(w, _route_from_track(track, 0), _buffer_pos(_game.buffer.find(id)), delay,
+				Callable(), Callable())
 	_sfx.play("pop" if boarded else "wait")
 	# Enchaînement : les wagons en attente montent en cascade, un train complet part
 	# dès que son dernier wagon est attelé.
@@ -651,7 +723,9 @@ func _schedule_load(step: Dictionary, delay: float, chain: int) -> void:
 	var w: Node2D = _wagons[step["id"]]
 	var slot: int = step["slot"]
 	var target: Vector2 = _slot_pos(slot, _game.slots[slot]["ids"].size() - 1)
-	_roll(w, target, delay, func() -> void:
+	_roll(w, _route_from_buffer(slot + 1), target, delay, func() -> void:
+		_switch_lane = slot + 1
+		queue_redraw()
 		_pop(w)
 		_sfx.play("pop", 1.0 + 0.15 * chain), _couple.bind(w))
 
@@ -760,10 +834,45 @@ func _celebrate() -> void:
 
 # --- Décor -------------------------------------------------------------------
 
-func _track(from: Vector2, to: Vector2) -> void:
-	var normal: Vector2 = (to - from).normalized().orthogonal() * 18.0
-	draw_line(from + normal, to + normal, RAIL, 5.0)
-	draw_line(from - normal, to - normal, RAIL, 5.0)
+## Traverses le long d'une ligne, sur `max_length` pixels au plus (0 = toute la ligne).
+func _ties(points: PackedVector2Array, max_length: float = 0.0) -> void:
+	var curve: Curve2D = Curve2D.new()
+	for p: Vector2 in points:
+		curve.add_point(p)
+	var length: float = curve.get_baked_length()
+	if max_length > 0.0:
+		length = minf(length, max_length)
+	var at: float = 10.0
+	while at < length:
+		var here: Vector2 = curve.sample_baked(at)
+		var ahead: Vector2 = curve.sample_baked(at + 2.0)
+		var normal: Vector2 = (ahead - here).normalized().orthogonal() * 25.0
+		draw_line(here + normal, here - normal, Color(RAIL, 0.38), 7.0)
+		at += 22.0
+
+
+## Les deux rails d'une ligne.
+func _rails(points: PackedVector2Array) -> void:
+	var left: PackedVector2Array = PackedVector2Array()
+	var right: PackedVector2Array = PackedVector2Array()
+	for i: int in points.size():
+		var dir: Vector2 = (points[mini(i + 1, points.size() - 1)] - points[maxi(i - 1, 0)]).normalized()
+		left.append(points[i] + dir.orthogonal() * 18.0)
+		right.append(points[i] - dir.orthogonal() * 18.0)
+	draw_polyline(left, RAIL, 5.0, true)
+	draw_polyline(right, RAIL, 5.0, true)
+
+
+## Heurtoir en bout de voie.
+func _bumper(center: Vector2, vertical_track: bool) -> void:
+	var half: Vector2 = Vector2(27.0, 6.0) if vertical_track else Vector2(6.0, 27.0)
+	draw_rect(Rect2(center - half, half * 2.0), INK)
+
+
+## Aiguillage : un point, et une lame dorée orientée vers `toward`.
+func _switch(at: Vector2, toward: Vector2) -> void:
+	draw_line(at, at + toward.normalized() * 30.0, GOLD, 7.0, true)
+	draw_circle(at, 9.0, INK)
 
 
 func _place(center: Vector2, color: Color) -> void:
@@ -776,22 +885,54 @@ func _draw() -> void:
 		return
 	var sz: Vector2 = _size()
 	var font: Font = ThemeDB.fallback_font
-	# Voies d'arrivée : le wagon du bas est celui qu'on peut prendre.
-	for t: int in _game.tracks.size():
-		var x: float = _track_x(t)
+	var n: int = _game.tracks.size()
+	var cy: float = _collector_y()
+	var last_lane: int = _game.slots.size()
+	var top: float = _track_rect(0).position.y
+	var places: int = mini(_buffer_view, _game.buffer_size)
+	var buffer_end: Vector2 = _buffer_pos(maxi(places, 1) - 1) + Vector2(50.0, 0.0)
+	# Lignes du réseau. Chaque voie d'arrivée descend, rejoint la collectrice, puis
+	# l'échelle (bord gauche) qui distribue la voie d'attente et les quais.
+	var arrivals: Array[PackedVector2Array] = []
+	for t: int in n:
 		draw_rect(_track_rect(t), Color(1, 1, 1, 0.35))
-		_track(Vector2(x, _track_rect(t).position.y), Vector2(x, _head_y() + 44.0))
+		var route: Array[Vector2] = [Vector2(_track_x(t), top)]
+		route.append_array(_route_from_track(t, last_lane))
+		route.append(Vector2(sz.x + 40.0, _lane_y(last_lane)))
+		arrivals.append(_rounded(route))
+	var lanes: Array[PackedVector2Array] = []
+	for lane: int in last_lane:
+		var end: Vector2 = buffer_end if lane == 0 else Vector2(sz.x + 40.0, _lane_y(lane))
+		lanes.append(_rounded([Vector2(LADDER_X, _lane_y(lane) - BEND), Vector2(LADDER_X, _lane_y(lane)), end]))
+	# Les quais se prolongent à gauche : c'est par là qu'arrivent les locomotives.
+	for lane: int in range(1, last_lane + 1):
+		lanes.append(PackedVector2Array([Vector2(-40.0, _lane_y(lane)), Vector2(LADDER_X + BEND, _lane_y(lane))]))
+	# Traverses d'abord, rails ensuite. La voie d'arrivée la plus à droite porte les
+	# traverses de toute la ligne principale ; les autres s'arrêtent à la collectrice.
+	for t: int in n:
+		_ties(arrivals[t], 0.0 if t == n - 1 else cy - top - BEND * 0.4)
+	for line: PackedVector2Array in lanes:
+		_ties(line)
+	for line: PackedVector2Array in arrivals:
+		_rails(line)
+	for line: PackedVector2Array in lanes:
+		_rails(line)
+	# Heurtoirs : en haut des voies d'arrivée et au bout de la voie d'attente.
+	for t: int in n:
+		_bumper(Vector2(_track_x(t), top + 6.0), true)
+	_bumper(buffer_end, false)
+	# Aiguillages : entrée de chaque voie sur la collectrice, puis départs de l'échelle.
+	for t: int in n - 1:
+		draw_circle(Vector2(_track_x(t) - minf(BEND, (_track_x(t) - LADDER_X) / 2.0), cy), 9.0, INK)
+	for lane: int in last_lane:
+		_switch(Vector2(LADDER_X, _lane_y(lane) - BEND),
+			Vector2(0.45, 1.0) if _switch_lane == lane else Vector2(0.0, 1.0))
 	# Voie d'attente : vire au rouge quand il ne reste qu'une place.
 	var tight: bool = _game.buffer.size() >= _game.buffer_size - 1
-	var first: Vector2 = _buffer_pos(0)
-	var last: Vector2 = _buffer_pos(_game.buffer_size - 1)
-	_track(first - Vector2(60.0, 0.0), last + Vector2(60.0, 0.0))
-	for b: int in mini(_buffer_view, _game.buffer_size):
+	for b: int in places:
 		_place(_buffer_pos(b), PALETTE[0] if tight else INK)
 	# Quais de départ : emplacements à remplir derrière chaque locomotive.
 	for s: int in _game.slots.size():
-		var loco: Vector2 = _loco_pos(s)
-		_track(Vector2(0.0, loco.y), Vector2(sz.x, loco.y))
 		if s >= _slot_view.size() or _slot_view[s]["color"] == -1:
 			continue
 		for k: int in int(_slot_view[s]["size"]):

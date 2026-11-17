@@ -121,9 +121,7 @@ func _random_level(spec: Dictionary, rng: RandomNumberGenerator) -> Dictionary:
 				train_sizes.append(size)
 				for w: int in size:
 					wagons.append(color)
-		for j: int in int(spec["bonus"]):
-			wagons.append(Game.BONUS)
-		if wagons.size() <= track_count * TRACK_ROWS:
+		if wagons.size() + int(spec["bonus"]) <= track_count * TRACK_ROWS:
 			break
 	_shuffle(wagons, rng)
 	# Mélange les trains en gardant couleur et longueur appariées.
@@ -147,6 +145,17 @@ func _random_level(spec: Dictionary, rng: RandomNumberGenerator) -> Dictionary:
 		var masked: bool = not track.is_empty() and rng.randf() < float(spec["hidden"])
 		track.append(wagons[i])
 		hidden[i % track_count].append(1 if masked else 0)
+	# Wagons « +1 » : chacun au milieu d'une voie différente (centre à un wagon près), pour qu'on
+	# aille le chercher sans qu'il soit ni offert d'entrée ni enfoui au fond.
+	var free: Array[int] = []
+	for t: int in track_count:
+		free.append(t)
+	_shuffle(free, rng)
+	for j: int in mini(int(spec["bonus"]), track_count):
+		var n: int = tracks[free[j]].size()
+		var k: int = clampi(n / 2 + rng.randi_range(-1, 1), 1, maxi(n - 1, 1))
+		tracks[free[j]].insert(k, Game.BONUS)
+		hidden[free[j]].insert(k, 0)
 	# Paires de wagons attelés : deux wagons voisins d'une même voie, jamais un « +1 »,
 	# jamais deux paires qui se touchent.
 	var links: Array = []
