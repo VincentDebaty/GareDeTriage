@@ -705,7 +705,18 @@ func _relayout(duration: float, skip: Array = []) -> void:
 		for k: int in _game.tracks[t].size():
 			var id: int = _game.tracks[t][k]
 			var w: Node2D = _wagons[id]
-			_move(w, _track_pos(t, k), duration)
+			# Une voie peut porter plus de wagons que l'écran n'en montre : ceux du haut
+			# attendent, cachés, au bout de la voie et apparaissent en descendant.
+			if k >= TRACK_ROWS:
+				_stop_move(w)
+				w.visible = false
+				w.position = _track_pos(t, TRACK_ROWS)
+			else:
+				if not w.visible:
+					w.visible = true
+					w.modulate.a = 0.0
+					w.create_tween().tween_property(w, "modulate:a", 1.0, maxf(duration, 0.01))
+				_move(w, _track_pos(t, k), duration)
 			# Sur une voie d'arrivée, les wagons regardent vers le bas, dans le sens de la marche.
 			w.set("heading", PI / 2.0)
 			w.coupled = k > 0 and _game.linked[_game.tracks[t][k - 1]] == 1
@@ -1090,7 +1101,18 @@ func _draw() -> void:
 		_rails(line)
 	# Heurtoirs : en haut des voies d'arrivée et au bout de la voie d'attente.
 	for t: int in n:
-		_bumper(Vector2(_track_x(t), top + 6.0), true)
+		var unseen: int = _game.tracks[t].size() - TRACK_ROWS
+		if unseen <= 0:
+			_bumper(Vector2(_track_x(t), top + 6.0), true)
+			continue
+		# Voie plus longue que l'écran : une étiquette compte les wagons encore cachés.
+		var tag: Rect2 = Rect2(_track_x(t) - 36.0, top - 12.0, 72.0, 38.0)
+		draw_style_box(_box(INK, 14), tag)
+		draw_style_box(_box(Color("5b3fd6"), 12), tag.grow(-3.0))
+		draw_string_outline(font, Vector2(tag.position.x, tag.position.y + 28.0), "+%d" % unseen,
+			HORIZONTAL_ALIGNMENT_CENTER, tag.size.x, 24, 6, INK)
+		draw_string(font, Vector2(tag.position.x, tag.position.y + 28.0), "+%d" % unseen,
+			HORIZONTAL_ALIGNMENT_CENTER, tag.size.x, 24, Color.WHITE)
 	_bumper(buffer_end, false)
 	# Aiguillages : entrée de chaque voie sur la collectrice, puis départs de l'échelle.
 	for t: int in n - 1:

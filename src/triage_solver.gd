@@ -6,16 +6,21 @@ const Game := preload("res://src/triage_game.gd")
 
 ## Cherche une solution depuis l'état donné (non modifié).
 ## Renvoie {solvable: bool, moves: Array[int], states: int} ; `moves` liste les voies choisies.
-static func solve(game: Game) -> Dictionary:
+## `limit` > 0 : abandonne après ce nombre d'états visités (`aborted` vaut alors true et
+## `solvable` false, sans que le niveau soit forcément infaisable).
+static func solve(game: Game, limit: int = 0) -> Dictionary:
 	var start: Game = game.clone() as Game
 	start.settle()
 	var seen: Dictionary = {}
 	var path: Array[int] = []
-	var ok: bool = _dfs(start, seen, path)
-	return {"solvable": ok, "moves": path, "states": seen.size()}
+	var ok: bool = _dfs(start, seen, path, limit)
+	return {"solvable": ok, "moves": path, "states": seen.size(),
+		"aborted": not ok and limit > 0 and seen.size() >= limit}
 
 
-static func _dfs(g: Game, seen: Dictionary, path: Array[int]) -> bool:
+static func _dfs(g: Game, seen: Dictionary, path: Array[int], limit: int = 0) -> bool:
+	if limit > 0 and seen.size() >= limit:
+		return false
 	var st: int = g.status()
 	if st == Game.WON:
 		return true
@@ -32,7 +37,7 @@ static func _dfs(g: Game, seen: Dictionary, path: Array[int]) -> bool:
 		n.take(t)
 		n.settle()
 		path.append(t)
-		if _dfs(n, seen, path):
+		if _dfs(n, seen, path, limit):
 			return true
 		path.pop_back()
 	return false
