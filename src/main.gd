@@ -88,6 +88,10 @@ var _progress: Dictionary = {"version": SAVE_VERSION, "level": 0, "stars": {}}
 var _save_enabled: bool = true
 
 var _pieces: Node2D
+var _gate_layer: Node2D
+## Nombre de trains partis tel que l'écran le montre : les barrières s'ouvrent quand le
+## train s'ébranle, pas dès que la règle l'a décidé.
+var _departed_view: int = 0
 var _sfx: Sfx
 var _title: Button
 var _map: MapView
@@ -124,6 +128,10 @@ func _ready() -> void:
 	_line = JSON.parse_string(FileAccess.get_file_as_string("res://data/line.json"))
 	_pieces = Node2D.new()
 	add_child(_pieces)
+	# Les barrières se dessinent par-dessus les wagons.
+	_gate_layer = Node2D.new()
+	_gate_layer.draw.connect(_draw_gates)
+	add_child(_gate_layer)
 	_sfx = Sfx.new()
 	add_child(_sfx)
 	_build_ui()
@@ -589,6 +597,7 @@ func _rebuild() -> void:
 		waiting.position = _queue_pos(p)
 		_queue.append(waiting)
 	_buffer_view = _game.buffer_size
+	_departed_view = _game.departed
 	_view_applied = _view_seq
 	_relayout(0.0)
 
@@ -794,6 +803,7 @@ func _relayout(duration: float, skip: Array = []) -> void:
 			for k: int in ids.size():
 				_move(_wagons[ids[k]], _slot_pos(s, k), 0.0)
 				_wagons[ids[k]].set("heading", 0.0)
+	_tint_tracks()
 	queue_redraw()
 
 
@@ -945,6 +955,59 @@ func _schedule_depart(step: Dictionary, delay: float) -> void:
 	_schedule_view(slot, delay + 0.12, {"color": -1, "size": 0}, null)
 	_spawn_loco(slot, delay + NEXT_TRAIN_DELAY - LOCO_IN_TIME)
 	queue_redraw()
+	# Les compteurs des barrières descendent quand le train s'ébranle.
+	var gone: int = _game.departed
+	var gen: int = _gen
+	get_tree().create_timer(delay + 0.12).timeout.connect(func() -> void:
+		if gen != _gen or gone <= _departed_view:
+			return
+		var opened: bool = false
+		for t: int in _game.tracks.size():
+			opened = opened or (_game.gates[t] > _departed_view and _game.gates[t] <= gone)
+		_departed_view = gone
+		_tint_tracks()
+		if opened:
+			_sfx.play("star")
+			Input.vibrate_handheld(25))
+
+
+## Nombre de trains que l'écran annonce encore sur la barrière de cette voie (0 = ouverte).
+func _gate_shown(track: int) -> int:
+	return maxi(0, _game.gates[track] - _departed_view)
+
+
+## Assombrit les wagons des voies fermées, et redessine les barrières.
+func _tint_tracks() -> void:
+	for t: int in _game.tracks.size():
+		var shade: float = 0.5 if _gate_shown(t) > 0 else 1.0
+		for id: int in _game.tracks[t]:
+			var w: Node2D = _wagons[id]
+			w.modulate = Color(shade, shade, shade + (1.0 - shade) * 0.3, w.modulate.a)
+	_gate_layer.queue_redraw()
+
+
+## Barrière rayée en bas d'une voie fermée, avec le nombre de trains qui doivent encore partir.
+func _draw_gates() -> void:
+	if _game == null:
+		return
+	var font: Font = ThemeDB.fallback_font
+	for t: int in _game.tracks.size():
+		var left: int = _gate_shown(t)
+		if left <= 0:
+			continue
+		var width: float = minf(_track_gap() - 18.0, 122.0)
+		var bar: Rect2 = Rect2(_track_x(t) - width / 2.0, _head_y() + 44.0, width, 18.0)
+		_gate_layer.draw_style_box(_box(INK, 9), bar.grow(4.0))
+		var stripes: int = 6
+		for k: int in stripes:
+			_gate_layer.draw_rect(Rect2(bar.position.x + k * width / stripes, bar.position.y, width / stripes, bar.size.y),
+				Color("e0322b") if k % 2 == 0 else Color.WHITE)
+		# Pastille du compteur, au milieu de la barrière.
+		var center: Vector2 = bar.get_center()
+		_gate_layer.draw_circle(center, 25.0, INK)
+		_gate_layer.draw_circle(center, 20.0, GOLD)
+		_gate_layer.draw_string(font, center + Vector2(-20.0, 10.0), str(left),
+			HORIZONTAL_ALIGNMENT_CENTER, 40.0, 28, INK)
 
 
 func _finish() -> void:

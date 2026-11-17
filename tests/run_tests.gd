@@ -16,6 +16,7 @@ func _init() -> void:
 	_test_coupled_wagons()
 	_test_bonus_place()
 	_test_jokers()
+	_test_gates()
 	_test_levels_are_consistent_and_solvable()
 	_test_solution_replay_conserves_wagons()
 	print("%d vérifications réussies, %d en échec" % [_passed, _failed])
@@ -225,6 +226,40 @@ func _test_jokers() -> void:
 	after.sort()
 	_check(before == after and g.tracks[0].size() == 4 and g.tracks[1].size() == 2, "le mélange garde les wagons et la longueur des voies")
 	_check(unlinked, "le mélange défait les attelages")
+
+
+func _test_gates() -> void:
+	# La voie 1 est fermée jusqu'au départ d'un train.
+	var g: Game = Game.new()
+	g.load_level({"tracks": [[0, 0, 1], [1, 1, 0]], "gates": [0, 1], "trains": [0, 1],
+		"train_sizes": [3, 3], "buffer": 2, "slots": 1})
+	_check(g.gate_left(1) == 1 and not g.can_take(1), "voie fermée : on ne peut rien y prendre")
+	_check(g.take(1).is_empty(), "prendre sur une voie fermée est refusé")
+	_check(not Solver.solve(g)["solvable"], "niveau infaisable si la barrière enferme un wagon nécessaire")
+	g = Game.new()
+	g.load_level({"tracks": [[0, 0, 0, 1], [1, 1]], "gates": [0, 1], "trains": [0, 1],
+		"train_sizes": [3, 3], "buffer": 2, "slots": 1})
+	var copy: Game = g.clone() as Game
+	_check(copy.gate_left(1) == 1, "la copie garde la barrière")
+	_check(not g.joker_send_back(), "le renvoi ne fait rien sans wagon en attente")
+	g.take(0)
+	g.take(0)
+	g.take(0)
+	g.settle()
+	_check(g.departed == 1 and g.gate_left(1) == 0 and g.can_take(1), "la barrière s'ouvre au départ du train")
+	_check(Solver.solve(copy)["solvable"], "le solveur attend l'ouverture de la barrière")
+	# Les jokers respectent les barrières fermées.
+	g = Game.new()
+	g.load_level({"tracks": [[1, 1, 1], [0, 0, 0]], "gates": [0, 2], "trains": [0, 1],
+		"train_sizes": [3, 3], "buffer": 3, "slots": 1})
+	_check(not g.joker_magnet(), "l'aimant ne tire rien d'une voie fermée")
+	g.take(0)
+	_check(g.joker_send_back() and g.tracks[0].size() == 3 and g.tracks[1].size() == 3, "le renvoi évite la voie fermée")
+	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	rng.seed = 2
+	var closed: Array = g.tracks[1].duplicate()
+	g.joker_shuffle(rng)
+	_check(g.tracks[1] == closed, "le mélange ne touche pas la voie fermée")
 
 
 func _test_solution_replay_conserves_wagons() -> void:

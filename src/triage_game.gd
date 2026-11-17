@@ -44,6 +44,11 @@ var pending_sizes: Array[int] = []
 var moves: int = 0
 ## Plus grand nombre de wagons en attente en même temps (sert à la note).
 var peak_buffer: int = 0
+## Barrières : pour chaque voie, nombre de trains qui doivent être partis avant qu'on puisse
+## y prendre un wagon (0 = voie libre).
+var gates: Array[int] = []
+## Nombre de trains déjà partis.
+var departed: int = 0
 
 
 func load_level(level: Dictionary) -> void:
@@ -76,6 +81,17 @@ func load_level(level: Dictionary) -> void:
 		slots.append(_next_train())
 	moves = 0
 	peak_buffer = 0
+	departed = 0
+	gates.clear()
+	var closed: Array = level.get("gates", [])
+	for t: int in tracks.size():
+		gates.append(int(closed[t]) if t < closed.size() else 0)
+
+
+## Nombre de trains qui doivent encore partir avant que la barrière de cette voie s'ouvre
+## (0 = voie libre).
+func gate_left(track: int) -> int:
+	return maxi(0, gates[track] - departed)
 
 
 func _next_train() -> Dictionary:
@@ -109,6 +125,8 @@ func _group(track: int) -> Array[int]:
 ## TO_BONUS pour un wagon « +1 ». Renvoie un tableau vide si le coup est impossible.
 func _plan(track: int) -> Array[int]:
 	var plan: Array[int] = []
+	if gate_left(track) > 0:
+		return plan
 	var added: Dictionary = {}
 	var waiting: int = buffer.size()
 	var places: int = buffer_size
@@ -165,6 +183,7 @@ func settle_step() -> Dictionary:
 		if slots[s]["color"] != -1 and slots[s]["ids"].size() >= slots[s]["size"]:
 			var gone: Array = slots[s]["ids"]
 			slots[s] = _next_train()
+			departed += 1
 			return {"type": "depart", "slot": s, "ids": gone}
 	for b: int in buffer.size():
 		var slot: int = _slot_for(colors[buffer[b]])
@@ -229,6 +248,9 @@ func joker_magnet() -> bool:
 		var best_t: int = -1
 		var best_k: int = -1
 		for t: int in tracks.size():
+			# L'aimant ne passe pas les barrières fermées.
+			if gate_left(t) > 0:
+				continue
 			for k: int in tracks[t].size():
 				if colors[tracks[t][k]] == slots[slot]["color"]:
 					if best_t < 0 or k < best_k:
@@ -244,13 +266,14 @@ func joker_magnet() -> bool:
 	return moved
 
 
-## Mélange : redistribue au hasard tous les wagons des voies (chaque voie garde sa
-## longueur). Les attelages sont défaits.
+## Mélange : redistribue au hasard tous les wagons des voies ouvertes (chaque voie garde sa
+## longueur). Les attelages sont défaits. Les voies fermées par une barrière ne bougent pas.
 func joker_shuffle(rng: RandomNumberGenerator) -> bool:
 	var ids: Array[int] = []
-	for t: Array in tracks:
-		for id: int in t:
-			ids.append(id)
+	for t: int in tracks.size():
+		if gate_left(t) == 0:
+			for id: int in tracks[t]:
+				ids.append(id)
 	if ids.size() < 2:
 		return false
 	for i: int in range(ids.size() - 1, 0, -1):
@@ -259,9 +282,11 @@ func joker_shuffle(rng: RandomNumberGenerator) -> bool:
 		ids[i] = ids[j]
 		ids[j] = tmp
 	var n: int = 0
-	for t: Array in tracks:
-		for k: int in t.size():
-			t[k] = ids[n]
+	for t: int in tracks.size():
+		if gate_left(t) > 0:
+			continue
+		for k: int in tracks[t].size():
+			tracks[t][k] = ids[n]
 			linked[ids[n]] = 0
 			n += 1
 	return true
@@ -270,11 +295,16 @@ func joker_shuffle(rng: RandomNumberGenerator) -> bool:
 ## Renvoi : les wagons en attente repartent au fond des voies (les plus courtes d'abord),
 ## la voie d'attente est vide.
 func joker_send_back() -> bool:
-	if buffer.is_empty():
+	var open: Array[int] = []
+	for t: int in tracks.size():
+		if gate_left(t) == 0:
+			open.append(t)
+	if buffer.is_empty() or open.is_empty():
 		return false
 	for id: int in buffer:
-		var shortest: int = 0
-		for t: int in tracks.size():
+		# Jamais derrière une barrière fermée : les wagons y resteraient enfermés.
+		var shortest: int = open[0]
+		for t: int in open:
 			if tracks[t].size() < tracks[shortest].size():
 				shortest = t
 		linked[id] = 0
@@ -307,6 +337,8 @@ func clone() -> RefCounted:
 	g.pending_sizes = pending_sizes.duplicate()
 	g.moves = moves
 	g.peak_buffer = peak_buffer
+	g.gates = gates
+	g.departed = departed
 	return g
 
 

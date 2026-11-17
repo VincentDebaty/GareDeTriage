@@ -36,6 +36,10 @@ const QUAY_HINTS: Dictionary = {
 	9: "Nouveau : trois trains à quai.",
 	13: "Nouveau : un seul quai, un train à la fois.",
 }
+## Barrières : numéro de niveau -> pour chaque voie fermée, nombre de trains qui doivent partir
+## avant qu'elle s'ouvre. Les voies fermées sont tirées au hasard.
+const GATES: Dictionary = {15: [2], 19: [2], 20: [3], 23: [2], 24: [3], 27: [2, 3], 30: [2, 4]}
+const GATE_HINT := "Nouveau : la barrière s'ouvre après 2 trains partis."
 ## À partir de ce niveau, les voies d'arrivée n'ont plus toutes la même longueur.
 const UNEVEN_FROM := 4
 ## Nombre de places d'attente que l'écran peut montrer.
@@ -60,7 +64,16 @@ func _init() -> void:
 			if c > 0 and c % CANDIDATES == 0:
 				if not best.is_empty():
 					break
-				spec["buffer"] = mini(int(spec["buffer"]) + 1, MAX_PLACES - int(spec["bonus"]))
+				var most: int = MAX_PLACES - int(spec["bonus"])
+				if int(spec["buffer"]) < most:
+					spec["buffer"] = int(spec["buffer"]) + 1
+				else:
+					# Voie d'attente déjà au maximum : les barrières s'ouvrent un train plus tôt.
+					var easier: Array = []
+					for g: int in spec.get("gates", []):
+						if g > 1:
+							easier.append(g - 1)
+					spec["gates"] = easier
 			var level: Dictionary = _random_level(spec, rng)
 			var par: int = _par(level)
 			if par < 0:
@@ -110,6 +123,10 @@ func _specs() -> Array[Dictionary]:
 			specs[i]["buffer"] = mini(int(specs[i]["buffer"]), MAX_PLACES - int(specs[i]["bonus"]))
 		if QUAY_HINTS.has(number):
 			specs[i]["hint"] = QUAY_HINTS[number]
+		if GATES.has(number):
+			specs[i]["gates"] = GATES[number].duplicate()
+	var first_gate: int = GATES.keys().min()
+	specs[first_gate - 1]["hint"] = GATE_HINT
 	return specs
 
 
@@ -223,7 +240,19 @@ func _random_level(spec: Dictionary, rng: RandomNumberGenerator) -> Dictionary:
 			continue
 		links[t][k] = 1
 		placed += 1
+	# Barrières : sur des voies différentes, jamais sur toutes.
+	var gates: Array[int] = []
+	for t: int in track_count:
+		gates.append(0)
+	var closed: Array[int] = []
+	for t: int in track_count:
+		closed.append(t)
+	_shuffle(closed, rng)
+	var wanted: Array = spec.get("gates", [])
+	for j: int in mini(wanted.size(), track_count - 1):
+		gates[closed[j]] = int(wanted[j])
 	return {
+		"gates": gates,
 		"tracks": tracks,
 		"hidden": hidden,
 		"links": links,
