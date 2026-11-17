@@ -24,10 +24,22 @@ const TIERS: Array[Dictionary] = [
 		"hint": "Nouveau : deux wagons attelés partent ensemble. Il faut une place pour chacun."},
 	{"count": 5, "colors": 4, "trains_per_color": 2, "tracks": 4, "buffer": 3, "sizes": [2, 3, 4], "hidden": 0.0, "links": 2, "bonus": 1, "from": 0.20, "to": 0.08,
 		"hint": "Nouveau : le wagon « +1 » ajoute une place d'attente pour le reste du niveau."},
-	{"count": 5, "colors": 5, "trains_per_color": 2, "tracks": 4, "buffer": 5, "sizes": [2, 3, 4], "hidden": 0.0, "links": 3, "bonus": 1, "from": 0.14, "to": 0.06},
-	{"count": 5, "colors": 5, "trains_per_color": 2, "tracks": 4, "buffer": 4, "sizes": [2, 3, 4], "hidden": 0.0, "links": 3, "bonus": 2, "from": 0.08, "to": 0.03},
+	{"count": 5, "colors": 5, "trains_per_color": 2, "tracks": 5, "buffer": 5, "sizes": [2, 3, 4], "hidden": 0.0, "links": 3, "bonus": 1, "from": 0.14, "to": 0.06},
+	{"count": 5, "colors": 5, "trains_per_color": 2, "tracks": 5, "buffer": 4, "sizes": [2, 3, 4], "hidden": 0.0, "links": 3, "bonus": 2, "from": 0.08, "to": 0.03},
 	{"count": 5, "colors": 6, "trains_per_color": 2, "tracks": 5, "buffer": 5, "sizes": [2, 3, 4], "hidden": 0.0, "links": 4, "bonus": 2, "from": 0.07, "to": 0.02},
 ]
+## Nombre de trains à quai en même temps, pour les niveaux qui s'écartent des 2 habituels
+## (numéro de niveau -> quais). Un seul quai oblige à suivre l'ordre des trains : la voie
+## d'attente y gagne 2 places. Trois quais donnent de l'air : elle en perd une.
+const QUAYS: Dictionary = {9: 3, 13: 1, 14: 3, 17: 1, 18: 3, 21: 1, 22: 3, 25: 1, 26: 3, 28: 1, 29: 3}
+const QUAY_HINTS: Dictionary = {
+	9: "Nouveau : trois trains à quai.",
+	13: "Nouveau : un seul quai, un train à la fois.",
+}
+## À partir de ce niveau, les voies d'arrivée n'ont plus toutes la même longueur.
+const UNEVEN_FROM := 4
+## Nombre de places d'attente que l'écran peut montrer.
+const MAX_PLACES := 8
 ## Nombre maximal de wagons par voie (hauteur disponible à l'écran).
 const TRACK_ROWS := 8
 const CANDIDATES := 40
@@ -43,7 +55,12 @@ func _init() -> void:
 		var best: Dictionary = {}
 		var best_gap: float = 2.0
 		var best_rate: float = 0.0
-		for c: int in CANDIDATES:
+		for c: int in CANDIDATES * 6:
+			# Aucun tirage faisable : on redonne une place d'attente et on recommence.
+			if c > 0 and c % CANDIDATES == 0:
+				if not best.is_empty():
+					break
+				spec["buffer"] = mini(int(spec["buffer"]) + 1, MAX_PLACES - int(spec["bonus"]))
 			var level: Dictionary = _random_level(spec, rng)
 			var par: int = _par(level)
 			if par < 0:
@@ -82,6 +99,17 @@ func _specs() -> Array[Dictionary]:
 			var t: float = 0.0 if count == 1 else float(i) / float(count - 1)
 			spec["target"] = lerpf(tier["from"], tier["to"], t)
 			specs.append(spec)
+	for i: int in specs.size():
+		var number: int = i + 1
+		specs[i]["uneven"] = number >= UNEVEN_FROM
+		if QUAYS.has(number):
+			var quays: int = QUAYS[number]
+			specs[i]["slots"] = quays
+			specs[i]["buffer"] = maxi(2, int(specs[i]["buffer"]) + (2 if quays == 1 else -1))
+			# L'écran montre 8 places d'attente au plus, wagons « +1 » compris.
+			specs[i]["buffer"] = mini(int(specs[i]["buffer"]), MAX_PLACES - int(specs[i]["bonus"]))
+		if QUAY_HINTS.has(number):
+			specs[i]["hint"] = QUAY_HINTS[number]
 	return specs
 
 
@@ -121,7 +149,8 @@ func _random_level(spec: Dictionary, rng: RandomNumberGenerator) -> Dictionary:
 				train_sizes.append(size)
 				for w: int in size:
 					wagons.append(color)
-		if wagons.size() + int(spec["bonus"]) <= track_count * TRACK_ROWS:
+		# Chaque voie garde une place libre pour un éventuel wagon « +1 ».
+		if wagons.size() <= track_count * (TRACK_ROWS - (1 if int(spec["bonus"]) > 0 else 0)):
 			break
 	_shuffle(wagons, rng)
 	# Mélange les trains en gardant couleur et longueur appariées.
@@ -139,12 +168,27 @@ func _random_level(spec: Dictionary, rng: RandomNumberGenerator) -> Dictionary:
 	for t: int in track_count:
 		tracks.append([])
 		hidden.append([])
-	for i: int in wagons.size():
-		var track: Array = tracks[i % track_count]
-		# Le wagon de tête (premier de la voie) n'est jamais masqué.
-		var masked: bool = not track.is_empty() and rng.randf() < float(spec["hidden"])
-		track.append(wagons[i])
-		hidden[i % track_count].append(1 if masked else 0)
+	# Longueur de chaque voie : égales au départ, puis des wagons passent d'une voie à
+	# l'autre pour que le plateau n'ait pas toujours la même silhouette.
+	var room: int = TRACK_ROWS - (1 if int(spec["bonus"]) > 0 else 0)
+	var sizes_of: Array[int] = []
+	for t: int in track_count:
+		sizes_of.append(wagons.size() / track_count + (1 if t < wagons.size() % track_count else 0))
+	if spec.get("uneven", false):
+		for step: int in wagons.size() * 3:
+			var a: int = rng.randi_range(0, track_count - 1)
+			var b: int = rng.randi_range(0, track_count - 1)
+			if a != b and sizes_of[a] > 2 and sizes_of[b] < room:
+				sizes_of[a] -= 1
+				sizes_of[b] += 1
+	var next: int = 0
+	for t: int in track_count:
+		for k: int in sizes_of[t]:
+			# Le wagon de tête (premier de la voie) n'est jamais masqué.
+			var masked: bool = k > 0 and rng.randf() < float(spec["hidden"])
+			tracks[t].append(wagons[next])
+			hidden[t].append(1 if masked else 0)
+			next += 1
 	# Wagons « +1 » : chacun au milieu d'une voie différente (centre à un wagon près), pour qu'on
 	# aille le chercher sans qu'il soit ni offert d'entrée ni enfoui au fond.
 	var free: Array[int] = []
@@ -186,7 +230,7 @@ func _random_level(spec: Dictionary, rng: RandomNumberGenerator) -> Dictionary:
 		"trains": trains,
 		"train_sizes": lengths,
 		"buffer": spec["buffer"],
-		"slots": 2,
+		"slots": int(spec.get("slots", 2)),
 	}
 
 

@@ -351,7 +351,7 @@ func _layout_ui() -> void:
 	_hint.size = Vector2(sz.x - 80.0, 70.0)
 	# Légende de la voie des locomotives en attente, seulement s'il y a la place.
 	_pending_label.position = Vector2(26.0, _queue_y() - 68.0)
-	_pending_label.visible = _queue_y() - 68.0 > _lane_y(2) + 86.0
+	_pending_label.visible = _queue_y() - 68.0 > _lane_y(_game.slots.size() if _game != null else 2) + 86.0
 	_overlay.position = Vector2.ZERO
 	_overlay.size = sz
 	_overlay_label.position = Vector2(0.0, sz.y * 0.30)
@@ -473,7 +473,14 @@ func _collector_y() -> float:
 
 ## Ordonnée d'une voie de destination : 0 = attente, 1.. = quais.
 func _lane_y(lane: int) -> float:
-	return maxf(_size().y * 0.72, _collector_y() + 2.0 * BEND) + lane * _size().y * 0.072
+	return maxf(_size().y * 0.72, _collector_y() + 2.0 * BEND) + lane * _lane_gap()
+
+
+## Écart entre deux voies de destination : resserré quand il y a trois quais, pour que le
+## dernier ne touche pas la voie de garage.
+func _lane_gap() -> float:
+	var quays: int = _game.slots.size() if _game != null else 2
+	return _size().y * (0.072 if quays <= 2 else 0.056)
 
 
 func _buffer_pos(b: int) -> Vector2:
@@ -545,6 +552,7 @@ func _start_level(index: int) -> void:
 	RenderingServer.set_default_clear_color(Color(str(_region(index)["game"])))
 	_stars_label.text = "Étoiles : %d / %d" % [_total_stars(), _levels.size() * 3]
 	_hint.text = str(_levels[index].get("hint", ""))
+	_layout_ui()
 
 
 ## Recrée tous les wagons et locomotives d'après l'état de la règle, sans animation.
