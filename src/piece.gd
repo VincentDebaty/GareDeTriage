@@ -47,9 +47,9 @@ func _draw() -> void:
 	if is_loco:
 		return
 	if is_bonus:
-		draw_string_outline(ThemeDB.fallback_font, Vector2(-SIZE / 2.0, 12.0), "+1",
+		draw_string_outline(ThemeDB.fallback_font, Vector2(-SIZE / 2.0, 9.0), "+1",
 			HORIZONTAL_ALIGNMENT_CENTER, SIZE, 34, 8, Color.WHITE)
-		draw_string(ThemeDB.fallback_font, Vector2(-SIZE / 2.0, 12.0), "+1",
+		draw_string(ThemeDB.fallback_font, Vector2(-SIZE / 2.0, 9.0), "+1",
 			HORIZONTAL_ALIGNMENT_CENTER, SIZE, 34, Color("5b3fd6"))
 	if coupled:
 		# Attelage : une plaque sombre à cheval sur les deux wagons.

@@ -101,7 +101,7 @@ func _ready() -> void:
 	font.font_names = PackedStringArray(["Arial Rounded MT Bold", "Arial Rounded MT", "Helvetica Neue", "Arial"])
 	font.font_weight = 700
 	ThemeDB.fallback_font = font
-	for name: String in ["tray", "slot", "socket", "tie", "knob", "bumper"]:
+	for name: String in ["tray", "slot", "socket", "tie", "knob", "bumper", "star", "star_empty"]:
 		_tex[name] = load("res://assets/ui/%s.svg" % name)
 	for i: int in PALETTE.size():
 		_tex["chip_%d" % i] = load("res://assets/ui/chip_%d.svg" % i)
@@ -202,7 +202,7 @@ func _style_button(b: Button, look: String) -> void:
 		bg.patch_margin_left = 50
 		bg.patch_margin_right = 50
 		bg.patch_margin_top = 50
-		bg.patch_margin_bottom = 60
+		bg.patch_margin_bottom = 70
 		b.add_child(bg)
 		b.resized.connect(func() -> void: bg.size = b.size * 2.0)
 		b.button_down.connect(func() -> void: bg.texture = b.get_meta("pressed_tex"))
@@ -215,7 +215,7 @@ func _style_button(b: Button, look: String) -> void:
 	empty.content_margin_left = 18.0
 	empty.content_margin_right = 18.0
 	# Le texte se centre sur le dessus du bouton, pas sur sa tranche.
-	empty.content_margin_bottom = 8.0
+	empty.content_margin_bottom = 13.0
 	for state: String in ["normal", "hover", "pressed", "focus", "disabled"]:
 		b.add_theme_stylebox_override(state, empty)
 	for state: String in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
@@ -274,6 +274,7 @@ func _build_ui() -> void:
 	_map.level_picked.connect(_pick_level)
 	_map.closed.connect(func() -> void: _map.visible = false)
 	layer.add_child(_map)
+	_style_button(_map._close, "violet")
 	_layout_ui()
 
 
@@ -364,12 +365,8 @@ func _draw_stars() -> void:
 	if _stars_total <= 0:
 		return
 	for i: int in 3:
-		var center: Vector2 = Vector2((i - 1) * 110.0, 0.0)
-		var points: PackedVector2Array = PackedVector2Array()
-		for k: int in 10:
-			var radius: float = 48.0 if k % 2 == 0 else 21.0
-			points.append(center + Vector2.from_angle(-PI / 2.0 + k * PI / 5.0) * radius)
-		_star_row.draw_colored_polygon(points, GOLD if i < _stars_shown else Color(1, 1, 1, 0.25))
+		var tex: Texture2D = _tex["star" if i < _stars_shown else "star_empty"]
+		_star_row.draw_texture_rect(tex, Rect2((i - 1) * 110.0 - 52.0, -54.0, 104.0, 108.0), false)
 
 
 func _on_overlay_button() -> void:
@@ -924,7 +921,14 @@ func _nine(tex: Texture2D, rect: Rect2, margin: float) -> void:
 
 ## Lit de la voie : une rainure dans le plateau, de la couleur des creux des voies.
 func _bed(points: PackedVector2Array) -> void:
-	draw_polyline(points, SLOT.darkened(0.25), 64.0, true)
+	# Bord haut sombre (ombre de la paroi), bord bas clair : la rainure paraît creusée.
+	var up: PackedVector2Array = PackedVector2Array()
+	var down: PackedVector2Array = PackedVector2Array()
+	for p: Vector2 in points:
+		up.append(p + Vector2(0.0, -3.0))
+		down.append(p + Vector2(0.0, 3.0))
+	draw_polyline(down, TRAY.lightened(0.16), 60.0, true)
+	draw_polyline(up, SLOT.darkened(0.55), 60.0, true)
 	draw_polyline(points, SLOT, 58.0, true)
 
 
@@ -957,7 +961,7 @@ func _rails(points: PackedVector2Array) -> void:
 			var dir: Vector2 = (points[mini(i + 1, points.size() - 1)] - points[maxi(i - 1, 0)]).normalized()
 			var p: Vector2 = points[i] + dir.orthogonal() * 18.0 * side
 			rail.append(p)
-			shadow.append(p + Vector2(0.0, 3.5))
+			shadow.append(p + Vector2(0.0, 5.5))
 			shine.append(p + Vector2(-0.8, -1.4))
 		draw_polyline(shadow, Color(0.03, 0.01, 0.12, 0.5), 6.5, true)
 		draw_polyline(rail, Color("b9b1ec"), 6.5, true)
@@ -1003,7 +1007,7 @@ func _draw() -> void:
 	# Lignes du réseau. Chaque voie d'arrivée descend, rejoint la collectrice, puis
 	# l'échelle (bord gauche) qui distribue la voie d'attente et les quais.
 	# Plateau en relief qui porte toute la gare, puis le creux de chaque voie d'arrivée.
-	var tray: Rect2 = Rect2(8.0, top - 26.0, sz.x - 16.0, _lane_y(last_lane) + 60.0 - (top - 26.0))
+	var tray: Rect2 = Rect2(6.0, top - 34.0, sz.x - 12.0, _lane_y(last_lane) + 62.0 - (top - 34.0))
 	_nine(_tex["tray"], Rect2(tray.position - Vector2(4.0, 4.0), tray.size + Vector2(8.0, 24.0)), 50.0)
 	var arrivals: Array[PackedVector2Array] = []
 	for t: int in n:

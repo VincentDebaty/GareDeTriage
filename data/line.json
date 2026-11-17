@@ -1,8 +1,8 @@
 {
 	"regions": [
-		{"name": "La campagne", "first": 0, "map": "dfeac3", "game": "241d57", "decor": "tree"},
-		{"name": "La montagne", "first": 10, "map": "dde2ea", "game": "1c2659", "decor": "peak"},
-		{"name": "Le port", "first": 20, "map": "cfe6ee", "game": "15365c", "decor": "wave"}
+		{"name": "La campagne", "first": 0, "map": "1d5a48", "game": "241d57", "decor": "tree"},
+		{"name": "La montagne", "first": 10, "map": "2b387a", "game": "1c2659", "decor": "peak"},
+		{"name": "Le port", "first": 20, "map": "165078", "game": "15365c", "decor": "wave"}
 	],
 	"stations": [
 		"Valmont", "Les Aubiers", "Pré-Fleuri", "Moulins", "Sainte-Odile",

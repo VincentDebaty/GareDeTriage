@@ -1,0 +1,3 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="100" viewBox="0 0 96 100">
+<defs><linearGradient id="st" gradientUnits="userSpaceOnUse" x1="0" y1="4" x2="0" y2="96"><stop offset="0" stop-color="#4a40a6" stop-opacity="1"/><stop offset="1" stop-color="#2f2778" stop-opacity="1"/></linearGradient></defs><polygon points="48.0,6.0 59.8,33.8 89.8,36.4 67.0,56.2 73.9,85.6 48.0,70.0 22.1,85.6 29.0,56.2 6.2,36.4 36.2,33.8" fill="url(#st)" stroke="#1b1642" stroke-width="7" stroke-linejoin="round"/><ellipse cx="40" cy="32" rx="9" ry="5" fill="#ffffff" fill-opacity="0.75"/>
+</svg>

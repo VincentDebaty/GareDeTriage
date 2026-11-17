@@ -5,6 +5,7 @@ rails et boutons dans assets/ui.
 Les images sont dessinées au double de leur taille à l'écran. Après exécution, relancer
 l'import : godot --headless --path . --import
 """
+import math
 import os
 
 PALETTE = ["f0412b", "2f86f5", "ffc61a", "2fb344", "a35cf2", "f760b4"]
@@ -55,29 +56,29 @@ def body(w, wheels):
     """Bloc brillant de largeur w (unités 2x), face du dessus de 112 de haut."""
     cx = 20 + w / 2
     parts = [
-        f'<ellipse cx="{cx}" cy="150" rx="{w / 2 + 12}" ry="24" fill="url(#shadow)"/>',
-        f'<rect x="20" y="24" width="{w}" height="112" rx="28" fill="url(#side)"/>',
+        f'<ellipse cx="{cx}" cy="154" rx="{w / 2 + 18}" ry="28" fill="url(#shadow)"/>',
+        f'<rect x="20" y="34" width="{w}" height="104" rx="28" fill="url(#side)"/>',
     ]
-    parts += [wheel(x, 139, r) for x, r in wheels]
+    parts += [wheel(x, 141, r) for x, r in wheels]
     parts += [
-        f'<rect x="20" y="8" width="{w}" height="112" rx="28" fill="url(#top)"/>',
-        f'<rect x="22.5" y="10.5" width="{w - 5}" height="107" rx="25.5" fill="none" stroke="url(#rim)" stroke-width="5"/>',
+        f'<rect x="20" y="6" width="{w}" height="104" rx="28" fill="url(#top)"/>',
+        f'<rect x="22.5" y="8.5" width="{w - 5}" height="99" rx="25.5" fill="none" stroke="url(#rim)" stroke-width="5"/>',
     ]
     return parts
 
 
 def finish(w):
     return [
-        f'<rect x="32" y="15" width="{w - 24}" height="24" rx="12" fill="url(#gloss)"/>',
-        '<ellipse cx="46" cy="26" rx="10" ry="5.5" fill="#ffffff" fill-opacity="0.9"/>',
+        f'<rect x="32" y="13" width="{w - 24}" height="24" rx="12" fill="url(#gloss)"/>',
+        '<ellipse cx="46" cy="24" rx="10" ry="5.5" fill="#ffffff" fill-opacity="0.9"/>',
     ]
 
 
 def wagon(c, bonus=False):
     parts = body(128, [(48, 15), (120, 15)])
     if not bonus:
-        parts.append('<rect x="42" y="50" width="84" height="50" rx="14" fill="url(#panel)"/>')
-        parts.append(f'<rect x="48" y="57" width="72" height="36" rx="9" fill="#{c}"/>')
+        parts.append('<rect x="42" y="44" width="84" height="48" rx="14" fill="url(#panel)"/>')
+        parts.append(f'<rect x="48" y="51" width="72" height="34" rx="9" fill="#{c}"/>')
     parts += finish(128)
     return svg(168, c, bonus, parts)
 
@@ -85,14 +86,14 @@ def wagon(c, bonus=False):
 def loco(c):
     parts = body(180, [(56, 17), (112, 17), (168, 17)])
     parts += [
-        '<rect x="32" y="44" width="50" height="60" rx="13" fill="#1b1642"/>',
-        '<rect x="38" y="50" width="38" height="28" rx="8" fill="url(#glass)"/>',
-        '<ellipse cx="48" cy="57" rx="7" ry="3.5" fill="#ffffff" fill-opacity="0.8"/>',
-        '<circle cx="128" cy="72" r="29" fill="#1b1642"/>',
-        '<circle cx="128" cy="72" r="23" fill="url(#dome)"/>',
-        '<circle cx="128" cy="72" r="10" fill="#1b1642"/>',
-        '<circle cx="182" cy="72" r="15" fill="#1b1642"/>',
-        '<circle cx="182" cy="72" r="11" fill="url(#lamp)"/>',
+        '<rect x="32" y="38" width="50" height="58" rx="13" fill="#1b1642"/>',
+        '<rect x="38" y="44" width="38" height="28" rx="8" fill="url(#glass)"/>',
+        '<ellipse cx="48" cy="51" rx="7" ry="3.5" fill="#ffffff" fill-opacity="0.8"/>',
+        '<circle cx="128" cy="64" r="29" fill="#1b1642"/>',
+        '<circle cx="128" cy="64" r="23" fill="url(#dome)"/>',
+        '<circle cx="128" cy="64" r="10" fill="#1b1642"/>',
+        '<circle cx="182" cy="64" r="15" fill="#1b1642"/>',
+        '<circle cx="182" cy="64" r="11" fill="url(#lamp)"/>',
     ]
     parts += finish(180)
     return svg(220, c, False, parts)
@@ -121,23 +122,28 @@ def grad(name, y1, y2, stops):
 
 
 def tray():
-    """Plateau en relief (9 tranches, marge 100)."""
-    d = grad("face", 8, 100, [(0, light(TRAY, 0.20), 1), (1, "#" + TRAY, 1)]) \
-        + grad("rim", 8, 80, [(0, "#ffffff", 0.55), (1, "#ffffff", 0)]) \
-        + grad("side", 150, 232, [(0, dark(TRAY, 0.35), 1), (1, dark(TRAY, 0.62), 1)])
+    """Plateau vu légèrement du dessus : dessus des parois clair, fond en creux ombré par
+    la paroi du fond, façade avant haute (9 tranches, marge 100)."""
+    d = grad("wall", 8, 60, [(0, light(TRAY, 0.34), 1), (1, light(TRAY, 0.12), 1)]) \
+        + grad("rim", 8, 60, [(0, "#ffffff", 0.6), (1, "#ffffff", 0)]) \
+        + grad("floor", 30, 100, [(0, dark(TRAY, 0.72), 1), (0.3, dark(TRAY, 0.50), 1), (1, dark(TRAY, 0.14), 1)]) \
+        + grad("side", 150, 236, [(0, dark(TRAY, 0.40), 1), (1, dark(TRAY, 0.70), 1)]) \
+        + grad("lip", 150, 190, [(0, "#ffffff", 0), (1, "#ffffff", 0.28)])
     body = f"<defs>{d}</defs>"
-    for i, op in enumerate([0.10, 0.12, 0.14]):
-        body += f'<rect x="{2 + i * 2}" y="{40 + i * 2}" width="{236 - i * 4}" height="{200 - i * 4}" rx="62" fill="#05021c" fill-opacity="{op}"/>'
-    body += '<rect x="8" y="32" width="224" height="200" rx="60" fill="url(#side)"/>'
-    body += '<rect x="8" y="8" width="224" height="200" rx="60" fill="url(#face)"/>'
-    body += '<rect x="11" y="11" width="218" height="194" rx="57" fill="none" stroke="url(#rim)" stroke-width="6"/>'
+    for i, op in enumerate([0.10, 0.13, 0.16]):
+        body += f'<rect x="{2 + i * 2}" y="{52 + i * 2}" width="{236 - i * 4}" height="{188 - i * 4}" rx="62" fill="#05021c" fill-opacity="{op}"/>'
+    body += '<rect x="8" y="48" width="224" height="188" rx="60" fill="url(#side)"/>'
+    body += '<rect x="8" y="8" width="224" height="184" rx="60" fill="url(#wall)"/>'
+    body += '<rect x="11" y="11" width="218" height="178" rx="57" fill="none" stroke="url(#rim)" stroke-width="6"/>'
+    body += '<rect x="30" y="30" width="180" height="140" rx="40" fill="url(#floor)"/>'
+    body += '<rect x="32.5" y="32.5" width="175" height="135" rx="37.5" fill="none" stroke="url(#lip)" stroke-width="5"/>'
     return doc(240, 240, body)
 
 
 def slot():
     """Creux d'une voie d'arrivée (9 tranches, marge 60)."""
-    d = grad("fill", 0, 56, [(0, dark(SLOT, 0.55), 1), (1, "#" + SLOT, 1)]) \
-        + grad("lip", 100, 160, [(0, "#ffffff", 0), (1, "#ffffff", 0.30)])
+    d = grad("fill", 0, 100, [(0, dark(SLOT, 0.80), 1), (0.35, dark(SLOT, 0.45), 1), (1, "#" + SLOT, 1)]) \
+        + grad("lip", 100, 160, [(0, "#ffffff", 0), (1, "#ffffff", 0.42)])
     body = f"<defs>{d}</defs>"
     body += '<rect x="0" y="0" width="160" height="160" rx="40" fill="url(#fill)"/>'
     body += '<rect x="2.5" y="2.5" width="155" height="155" rx="37.5" fill="none" stroke="url(#lip)" stroke-width="5"/>'
@@ -177,7 +183,7 @@ def bumper():
     d = grad("top", 0, 28, [(0, "#fff0a8", 1), (0.5, "#ffc61a", 1), (1, "#e7a400", 1)])
     body = f"<defs>{d}</defs>"
     body += '<rect x="2" y="14" width="112" height="30" rx="10" fill="#0c0830" fill-opacity="0.4"/>'
-    body += '<rect x="0" y="8" width="116" height="28" rx="10" fill="#a86f00"/>'
+    body += '<rect x="0" y="12" width="116" height="28" rx="10" fill="#a86f00"/>'
     body += '<rect x="0" y="0" width="116" height="28" rx="10" fill="url(#top)"/>'
     body += '<rect x="8" y="3.5" width="100" height="7" rx="3.5" fill="#ffffff" fill-opacity="0.6"/>'
     return doc(116, 44, body)
@@ -186,25 +192,83 @@ def bumper():
 def chip(c):
     body = (f'<defs><radialGradient id="c" cx="0.38" cy="0.3" r="0.8"><stop offset="0" stop-color="{light(c, 0.45)}"/>'
             f'<stop offset="0.6" stop-color="#{c}"/><stop offset="1" stop-color="{dark(c, 0.18)}"/></radialGradient></defs>'
-            f'<circle cx="40" cy="48" r="36" fill="{dark(c, 0.52)}"/><circle cx="40" cy="38" r="36" fill="url(#c)"/>'
+            f'<circle cx="40" cy="50" r="36" fill="{dark(c, 0.55)}"/><circle cx="40" cy="38" r="36" fill="url(#c)"/>'
             '<ellipse cx="30" cy="20" rx="14" ry="7" fill="#ffffff" fill-opacity="0.55"/>')
     return doc(80, 88, body)
 
 
 def button(c, pressed):
-    """Bouton bombé (9 tranches : marges 50 en haut et sur les côtés, 60 en bas)."""
-    y = 10 if pressed else 0
+    """Bouton bombé (9 tranches : marges 50 en haut et sur les côtés, 70 en bas)."""
+    y = 16 if pressed else 0
     face = dark(c, 0.10) if pressed else "#" + c
-    d = grad("face", y, y + 144, [(0, light(c, 0.05 if pressed else 0.30), 1), (0.35, face, 1), (0.7, face, 1), (1, dark(c, 0.16), 1)]) \
-        + grad("gloss", y + 6, y + 40, [(0, "#ffffff", 0.50), (1, "#ffffff", 0.04)]) \
-        + grad("rim", y, y + 70, [(0, "#ffffff", 0.7), (1, "#ffffff", 0)])
+    d = grad("face", y, y + 134, [(0, light(c, 0.05 if pressed else 0.32), 1), (0.35, face, 1), (0.7, face, 1), (1, dark(c, 0.16), 1)]) \
+        + grad("gloss", y + 6, y + 40, [(0, "#ffffff", 0.52), (1, "#ffffff", 0.04)]) \
+        + grad("rim", y, y + 70, [(0, "#ffffff", 0.7), (1, "#ffffff", 0)]) \
+        + grad("side", 90, 160, [(0, dark(c, 0.42), 1), (1, dark(c, 0.66), 1)])
     body = f"<defs>{d}</defs>"
-    body += f'<rect x="0" y="16" width="160" height="144" rx="36" fill="{dark(c, 0.50)}"/>'
-    body += f'<rect x="0" y="{y}" width="160" height="144" rx="36" fill="url(#face)"/>'
-    body += f'<rect x="2.5" y="{y + 2.5}" width="155" height="139" rx="33.5" fill="none" stroke="url(#rim)" stroke-width="5"/>'
+    body += '<rect x="0" y="26" width="160" height="134" rx="36" fill="url(#side)"/>'
+    body += f'<rect x="0" y="{y}" width="160" height="134" rx="36" fill="url(#face)"/>'
+    body += f'<rect x="2.5" y="{y + 2.5}" width="155" height="129" rx="33.5" fill="none" stroke="url(#rim)" stroke-width="5"/>'
     if not pressed:
         body += '<rect x="12" y="7" width="136" height="30" rx="15" fill="url(#gloss)"/>'
     return doc(160, 160, body)
+
+
+def station(c):
+    """Gare de la carte : un gros jeton brillant."""
+    body = (f'<defs><radialGradient id="s" cx="0.38" cy="0.3" r="0.85"><stop offset="0" stop-color="{light(c, 0.55)}"/>'
+            f'<stop offset="0.55" stop-color="#{c}"/><stop offset="1" stop-color="{dark(c, 0.22)}"/></radialGradient>'
+            '<radialGradient id="sh" cx="0.5" cy="0.5" r="0.5"><stop offset="0.4" stop-color="#05021c" stop-opacity="0.5"/>'
+            '<stop offset="1" stop-color="#05021c" stop-opacity="0"/></radialGradient></defs>'
+            '<ellipse cx="88" cy="160" rx="86" ry="30" fill="url(#sh)"/>'
+            f'<circle cx="88" cy="106" r="80" fill="{dark(c, 0.58)}"/>'
+            '<circle cx="88" cy="84" r="80" fill="url(#s)"/>'
+            f'<circle cx="88" cy="84" r="66" fill="none" stroke="{dark(c, 0.20)}" stroke-width="5" stroke-opacity="0.6"/>'
+            '<ellipse cx="62" cy="40" rx="34" ry="16" fill="#ffffff" fill-opacity="0.5"/>')
+    return doc(176, 192, body)
+
+
+def star(fill_a, fill_b, edge):
+    pts = []
+    for k in range(10):
+        r = 44 if k % 2 == 0 else 20
+        ang = -math.pi / 2 + k * math.pi / 5
+        pts.append(f"{48 + r * math.cos(ang):.1f},{50 + r * math.sin(ang):.1f}")
+    d = grad("st", 4, 96, [(0, fill_a, 1), (1, fill_b, 1)])
+    body = f"<defs>{d}</defs>"
+    body += f'<polygon points="{" ".join(pts)}" fill="url(#st)" stroke="{edge}" stroke-width="7" stroke-linejoin="round"/>'
+    body += '<ellipse cx="40" cy="32" rx="9" ry="5" fill="#ffffff" fill-opacity="0.75"/>'
+    return doc(96, 100, body)
+
+
+def blob(cx, cy, r, c):
+    return (f'<circle cx="{cx}" cy="{cy + 5}" r="{r}" fill="{dark(c, 0.45)}"/><circle cx="{cx}" cy="{cy}" r="{r}" fill="#{c}"/>'
+            f'<ellipse cx="{cx - r * 0.3:.0f}" cy="{cy - r * 0.45:.0f}" rx="{r * 0.4:.0f}" ry="{r * 0.2:.0f}" fill="#ffffff" fill-opacity="0.45"/>')
+
+
+def tree():
+    body = ('<ellipse cx="60" cy="112" rx="40" ry="10" fill="#05021c" fill-opacity="0.35"/>'
+            '<rect x="51" y="70" width="18" height="42" rx="6" fill="#7a4a24"/>'
+            + blob(60, 52, 36, "2fb344") + blob(36, 70, 22, "3cc552") + blob(84, 72, 20, "27a03b"))
+    return doc(120, 124, body)
+
+
+def peak():
+    d = grad("pk", 10, 110, [(0, "#b9c6ee", 1), (1, "#5a67b0", 1)])
+    body = (f"<defs>{d}</defs>"
+            '<ellipse cx="70" cy="110" rx="62" ry="10" fill="#05021c" fill-opacity="0.35"/>'
+            '<polygon points="96,108 140,108 118,56" fill="#4b5799" stroke="#4b5799" stroke-width="8" stroke-linejoin="round"/>'
+            '<polygon points="8,108 112,108 60,14" fill="url(#pk)" stroke="url(#pk)" stroke-width="8" stroke-linejoin="round"/>'
+            '<polygon points="60,14 42,48 54,42 62,52 70,42 80,50" fill="#ffffff" stroke="#ffffff" stroke-width="6" stroke-linejoin="round"/>')
+    return doc(148, 124, body)
+
+
+def wave():
+    path = "M10 34 a18 18 0 0 1 36 0 a18 18 0 0 1 36 0 a18 18 0 0 1 36 0"
+    body = (f'<path d="{path}" transform="translate(0 6)" fill="none" stroke="#0c3a5c" stroke-width="12" stroke-linecap="round"/>'
+            f'<path d="{path}" fill="none" stroke="#5fc9f2" stroke-width="12" stroke-linecap="round"/>'
+            f'<path d="{path}" transform="translate(0 -3)" fill="none" stroke="#d6f4ff" stroke-width="3.5" stroke-linecap="round"/>')
+    return doc(128, 60, body)
 
 
 def write(folder, name, text):
@@ -221,6 +285,14 @@ def main():
     write(UI, "bumper.svg", bumper())
     for i, c in enumerate(PALETTE):
         write(UI, f"chip_{i}.svg", chip(c))
+    write(UI, "station_done.svg", station("ffc61a"))
+    write(UI, "station_open.svg", station("f4f1ff"))
+    write(UI, "station_locked.svg", station("6f67a8"))
+    write(UI, "star.svg", star("#fff0a8", "#ffb400", "#a86f00"))
+    write(UI, "star_empty.svg", star("#4a40a6", "#2f2778", "#1b1642"))
+    write(UI, "tree.svg", tree())
+    write(UI, "peak.svg", peak())
+    write(UI, "wave.svg", wave())
     for name, c in BUTTONS.items():
         write(UI, f"button_{name}.svg", button(c, False))
         write(UI, f"button_{name}_pressed.svg", button(c, True))
