@@ -12,8 +12,11 @@ const TRACKS := 5
 const PER_TRACK := 20
 const COLORS := 6
 const BONUS := 2
-const LINKS := 8
-const BUFFER := 5
+const LINKS := 5
+## Places d'attente données au joueur. Avec les « +1 », 8 places au plus tiennent à l'écran.
+const BUFFER := 6
+## Le niveau retenu doit être faisable avec ce nombre de places au plus : le reste est de la marge.
+const PAR_MAX := 4
 const SIZES: Array[int] = [2, 3, 4]
 const CANDIDATES := 40
 ## Plafond d'états explorés par recherche (au-delà, on passe au candidat suivant).
@@ -31,10 +34,10 @@ func _init() -> void:
 		if par < 0:
 			continue
 		level["par"] = par + BONUS
-		if best.is_empty() or int(level["par"]) > int(best["par"]):
+		# On garde le candidat le moins exigeant : la marge du joueur est BUFFER - par.
+		if best.is_empty() or int(level["par"]) < int(best["par"]):
 			best = level
-		# Un niveau qui demande presque toute la voie d'attente : assez tendu pour l'essai.
-		if par >= BUFFER - 1:
+		if par <= 3:
 			break
 	if best.is_empty():
 		push_error("aucun niveau long faisable trouvé")
@@ -57,7 +60,7 @@ func _init() -> void:
 
 ## Plus petit nombre de places d'attente avec lequel une solution est trouvée (-1 sinon).
 func _par(level: Dictionary) -> int:
-	for b: int in range(2, BUFFER + 1):
+	for b: int in range(2, PAR_MAX + 1):
 		var trial: Dictionary = level.duplicate()
 		trial["buffer"] = b
 		var g: Game = Game.new()

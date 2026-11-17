@@ -38,6 +38,9 @@ const DEPART_TIME := 0.6
 const LOCO_IN_TIME := 0.35
 ## Délai entre le début d'un départ et l'arrivée à quai de la locomotive suivante.
 const NEXT_TRAIN_DELAY := 0.12 + DEPART_TIME * 0.7 + LOCO_IN_TIME
+## Plafond d'états explorés pour savoir s'il reste une solution (valeur d'essai). Au-delà,
+## on ne sait pas : rien n'est annoncé.
+const CHECK_LIMIT := 20000
 const SAVE_PATH := "user://progress.json"
 ## À incrémenter quand le jeu de niveaux change : la progression repart alors de zéro.
 const SAVE_VERSION := 4
@@ -51,6 +54,13 @@ var _locos: Array[Node2D] = []
 var _queue: Array[Node2D] = []
 ## États précédents, pour le bouton « Annuler ».
 var _history: Array[Game] = []
+## Nombre de coups joués au dernier moment où l'on sait que le niveau était encore faisable.
+var _safe_depth: int = 0
+## Numéro de la dernière vérification « reste-t-il une solution ? » ; les réponses plus
+## anciennes sont ignorées.
+var _check_seq: int = 0
+## Vérifications en cours, chacune dans son fil d'exécution.
+var _checks: Array[Thread] = []
 ## Wagons mystère déjà dévoilés (identifiant -> true).
 var _revealed: Dictionary = {}
 ## Ce que l'écran montre pour chaque quai ({color, size}) et pour les trains à venir
@@ -377,7 +387,7 @@ func _on_overlay_button() -> void:
 	if _game.status() == Game.WON:
 		_start_level((_level_index + 1) % _levels.size())
 	else:
-		_undo()
+		_rewind()
 
 
 func _on_overlay_alt() -> void:
@@ -488,6 +498,8 @@ func _start_level(index: int) -> void:
 	_level_index = index
 	_overlay.visible = false
 	_history.clear()
+	_safe_depth = 0
+	_check_seq += 1
 	_revealed.clear()
 	_game = Game.new()
 	_game.load_level(_levels[index])
@@ -836,6 +848,8 @@ func _take(track: int) -> void:
 		get_tree().create_timer(maxf(next_start, last_arrival) + 0.5).timeout.connect(func() -> void:
 			if gen == _gen:
 				_finish())
+	else:
+		_check_dead_end()
 
 
 ## Arrivée d'un wagon « +1 » : il disparaît et laisse une place d'attente de plus.
@@ -894,7 +908,66 @@ func _finish() -> void:
 			_celebrate()
 		Game.LOST:
 			_sfx.play("lose")
-			_show_overlay("Gare bloquée !", "Annuler le dernier coup", 0, "Recommencer le niveau")
+			_show_overlay("Gare bloquée !", "Reprendre avant l'erreur", 0, "Recommencer le niveau")
+
+
+## Vérifie en arrière-plan s'il reste une solution depuis la position actuelle. Si l'on est
+## sûr que non, le panneau « Voie sans issue » s'affiche sans attendre le dernier coup possible.
+func _check_dead_end() -> void:
+	_check_seq += 1
+	var seq: int = _check_seq
+	var depth: int = _history.size()
+	var snapshot: Game = _game.clone() as Game
+	var thread: Thread = Thread.new()
+	_checks.append(thread)
+	thread.start(func() -> void:
+		var r: Dictionary = Solver.solve(snapshot, CHECK_LIMIT)
+		_on_checked.call_deferred(thread, seq, depth, bool(r["solvable"]), bool(r["aborted"])))
+
+
+func _exit_tree() -> void:
+	for thread: Thread in _checks:
+		thread.wait_to_finish()
+	_checks.clear()
+
+
+func _on_checked(thread: Thread, seq: int, depth: int, solvable: bool, aborted: bool) -> void:
+	thread.wait_to_finish()
+	_checks.erase(thread)
+	if seq != _check_seq:
+		return
+	if solvable:
+		_safe_depth = depth
+		return
+	if aborted:
+		return
+	# Laisse le dernier wagon arriver avant d'annoncer la mauvaise nouvelle.
+	get_tree().create_timer(0.7).timeout.connect(func() -> void:
+		if seq == _check_seq and _game.status() == Game.PLAYING and not _overlay.visible:
+			_sfx.play("lose")
+			_show_overlay("Voie sans issue !", "Reprendre avant l'erreur", 0, "Recommencer le niveau"))
+
+
+## Revient au dernier moment où le niveau était encore faisable.
+func _rewind() -> void:
+	if _history.is_empty():
+		_sfx.play("nope")
+		return
+	var found: int = mini(_safe_depth, _history.size() - 1)
+	# Les positions dont la vérification n'avait pas abouti sont réexaminées, de la plus récente
+	# à la plus ancienne.
+	for d: int in range(_history.size() - 1, found, -1):
+		if Solver.solve(_history[d], CHECK_LIMIT)["solvable"]:
+			found = d
+			break
+	_gen += 1
+	_check_seq += 1
+	_game = _history[found]
+	_history.resize(found)
+	_safe_depth = found
+	_overlay.visible = false
+	_rebuild()
+	_sfx.play("undo")
 
 
 ## Revient à l'état d'avant le dernier coup.
@@ -907,6 +980,11 @@ func _undo() -> void:
 	_overlay.visible = false
 	_rebuild()
 	_sfx.play("undo")
+	if _history.size() > _safe_depth:
+		# Position pas encore reconnue comme faisable : on revérifie.
+		_check_dead_end()
+	else:
+		_check_seq += 1
 
 
 func _smoke() -> CPUParticles2D:
@@ -1159,6 +1237,20 @@ func _debug_hook() -> void:
 		_take(solution[k])
 		if pace > 0.0:
 			await _wait(pace)
+	# --naive=N : N coups « première voie jouable », pour provoquer une voie sans issue.
+	for k: int in int(opts.get("naive", "0")):
+		if _overlay.visible or _game.status() != Game.PLAYING:
+			break
+		for t: int in _game.tracks.size():
+			if _game.can_take(t):
+				_take(t)
+				break
+		await _wait(1.6)
+	print("coups joués : %d, panneau : %s (%s)" % [_history.size(), _overlay.visible, _overlay_label.text])
+	if opts.has("rewind"):
+		await _wait(0.5)
+		_rewind()
+		print("après reprise : %d coups, faisable : %s" % [_history.size(), Solver.solve(_game)["solvable"]])
 	if opts.has("map"):
 		_open_map()
 	for n: int in int(opts.get("undo", "0")):
