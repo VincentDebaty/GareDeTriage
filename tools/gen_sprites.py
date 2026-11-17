@@ -30,86 +30,6 @@ def dark(h, t):
     return mix(h, "120a3a", t)
 
 
-def defs(c, bonus):
-    side_a, side_b = (("#b3a8ee", "#8377cf") if bonus else (dark(c, 0.30), dark(c, 0.58)))
-    return f'''<defs>
-<linearGradient id="top" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{light(c, 0.34)}"/><stop offset="0.55" stop-color="#{c}"/><stop offset="1" stop-color="{dark(c, 0.10)}"/></linearGradient>
-<linearGradient id="side" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{side_a}"/><stop offset="1" stop-color="{side_b}"/></linearGradient>
-<linearGradient id="panel" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{dark(c, 0.26)}"/><stop offset="1" stop-color="{light(c, 0.12)}"/></linearGradient>
-<linearGradient id="rim" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.75"/><stop offset="0.6" stop-color="#ffffff" stop-opacity="0"/></linearGradient>
-<linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.62"/><stop offset="1" stop-color="#ffffff" stop-opacity="0.04"/></linearGradient>
-<radialGradient id="shadow" cx="0.5" cy="0.5" r="0.5"><stop offset="0.35" stop-color="#05021c" stop-opacity="0.55"/><stop offset="1" stop-color="#05021c" stop-opacity="0"/></radialGradient>
-<radialGradient id="wheel" cx="0.4" cy="0.35" r="0.7"><stop offset="0" stop-color="#5d55a3"/><stop offset="1" stop-color="#120d36"/></radialGradient>
-<radialGradient id="hub" cx="0.35" cy="0.3" r="0.8"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#9d95d8"/></radialGradient>
-<radialGradient id="dome" cx="0.35" cy="0.3" r="0.8"><stop offset="0" stop-color="{light(c, 0.45)}"/><stop offset="1" stop-color="{dark(c, 0.35)}"/></radialGradient>
-<linearGradient id="glass" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#d8f4ff"/><stop offset="1" stop-color="#3fa9f0"/></linearGradient>
-<radialGradient id="lamp" cx="0.4" cy="0.35" r="0.7"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#ffcf3a"/></radialGradient>
-</defs>'''
-
-
-def wheel(x, y, r):
-    return (f'<circle cx="{x}" cy="{y}" r="{r}" fill="url(#wheel)"/>'
-            f'<circle cx="{x}" cy="{y}" r="{r * 0.42:.1f}" fill="url(#hub)"/>')
-
-
-def body(w, wheels):
-    """Bloc brillant de largeur w (unités 2x), face du dessus de 112 de haut."""
-    cx = 20 + w / 2
-    parts = [
-        f'<ellipse cx="{cx}" cy="154" rx="{w / 2 + 18}" ry="28" fill="url(#shadow)"/>',
-        f'<rect x="20" y="34" width="{w}" height="104" rx="28" fill="url(#side)"/>',
-    ]
-    parts += [wheel(x, 141, r) for x, r in wheels]
-    parts += [
-        f'<rect x="20" y="6" width="{w}" height="104" rx="28" fill="url(#top)"/>',
-        f'<rect x="22.5" y="8.5" width="{w - 5}" height="99" rx="25.5" fill="none" stroke="url(#rim)" stroke-width="5"/>',
-    ]
-    return parts
-
-
-def finish(w):
-    return [
-        f'<rect x="32" y="13" width="{w - 24}" height="24" rx="12" fill="url(#gloss)"/>',
-        '<ellipse cx="46" cy="24" rx="10" ry="5.5" fill="#ffffff" fill-opacity="0.9"/>',
-    ]
-
-
-def wagon(c, bonus=False):
-    parts = body(128, [(48, 15), (120, 15)])
-    if not bonus:
-        parts.append('<rect x="42" y="44" width="84" height="48" rx="14" fill="url(#panel)"/>')
-        parts.append(f'<rect x="48" y="51" width="72" height="34" rx="9" fill="#{c}"/>')
-    parts += finish(128)
-    return svg(168, c, bonus, parts)
-
-
-def loco(c):
-    parts = body(180, [(56, 17), (112, 17), (168, 17)])
-    parts += [
-        '<rect x="32" y="38" width="50" height="58" rx="13" fill="#1b1642"/>',
-        '<rect x="38" y="44" width="38" height="28" rx="8" fill="url(#glass)"/>',
-        '<ellipse cx="48" cy="51" rx="7" ry="3.5" fill="#ffffff" fill-opacity="0.8"/>',
-        '<circle cx="128" cy="64" r="29" fill="#1b1642"/>',
-        '<circle cx="128" cy="64" r="23" fill="url(#dome)"/>',
-        '<circle cx="128" cy="64" r="10" fill="#1b1642"/>',
-        '<circle cx="182" cy="64" r="15" fill="#1b1642"/>',
-        '<circle cx="182" cy="64" r="11" fill="url(#lamp)"/>',
-    ]
-    parts += finish(180)
-    return svg(220, c, False, parts)
-
-
-def svg(width, c, bonus, parts):
-    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="184" viewBox="0 0 {width} 184">\n'
-            + defs(c, bonus) + "\n" + "\n".join(parts) + "\n</svg>\n")
-
-
-UI = os.path.join(os.path.dirname(__file__), "..", "assets", "ui")
-TRAY = "453a9e"
-SLOT = "2a2370"
-BUTTONS = {"violet": "6a55f2", "dark": "3a3095", "green": "2fb344"}
-
-
 def doc(w, h, body):
     return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">\n'
             + body + "\n</svg>\n")
@@ -119,6 +39,64 @@ def grad(name, y1, y2, stops):
     inner = "".join(f'<stop offset="{o}" stop-color="{c}" stop-opacity="{a}"/>' for o, c, a in stops)
     return (f'<linearGradient id="{name}" gradientUnits="userSpaceOnUse" x1="0" y1="{y1}" x2="0" y2="{y2}">'
             + inner + "</linearGradient>")
+
+
+# Les pièces sont vues du dessus et regardent vers la droite : le jeu les fait pivoter le
+# long des rails. L'éclairage est donc symétrique (toit bombé, plus clair au centre) ;
+# l'épaisseur et l'ombre sont ajoutées par le jeu, toujours vers le bas de l'écran.
+STEEL = "#1b1642"
+
+
+def bombe(name, y1, y2, c, lo, hi):
+    return grad(name, y1, y2, [(0, dark(c, lo), 1), (0.5, light(c, hi), 1), (1, dark(c, lo), 1)])
+
+
+def wagon(c, bonus=False):
+    edge = "#8377cf" if bonus else dark(c, 0.42)
+    d = bombe("roof", 12, 116, c, 0.20, 0.20) + bombe("panel", 26, 102, c, 0.04, 0.36)
+    body = f"<defs>{d}</defs>"
+    for x in (26, 90):
+        for y in (4, 112):
+            body += f'<rect x="{x}" y="{y}" width="28" height="12" rx="4" fill="{STEEL}"/>'
+    for x in (0, 130):
+        body += f'<rect x="{x}" y="54" width="14" height="20" rx="5" fill="{STEEL}"/>'
+    body += f'<rect x="10" y="12" width="124" height="104" rx="22" fill="url(#roof)" stroke="{edge}" stroke-width="4"/>'
+    body += '<rect x="26" y="26" width="92" height="76" rx="14" fill="url(#panel)"/>'
+    if not bonus:
+        for x in (49, 72, 95):
+            body += f'<line x1="{x}" y1="32" x2="{x}" y2="96" stroke="{dark(c, 0.20)}" stroke-width="4" stroke-linecap="round" stroke-opacity="0.75"/>'
+    body += '<rect x="32" y="58" width="80" height="12" rx="6" fill="#ffffff" fill-opacity="0.34"/>'
+    return doc(144, 128, body)
+
+
+def loco(c):
+    d = bombe("roof", 12, 116, c, 0.20, 0.20) + bombe("panel", 20, 108, c, 0.04, 0.36) \
+        + bombe("boiler", 26, 102, c, 0.16, 0.50)
+    body = (f'<defs>{d}<radialGradient id="dome" cx="0.4" cy="0.4" r="0.7"><stop offset="0" stop-color="{light(c, 0.6)}"/>'
+            f'<stop offset="1" stop-color="{dark(c, 0.25)}"/></radialGradient>'
+            '<radialGradient id="lamp" cx="0.4" cy="0.4" r="0.7"><stop offset="0" stop-color="#ffffff"/>'
+            '<stop offset="1" stop-color="#ffcf3a"/></radialGradient></defs>')
+    for y in (4, 112):
+        body += f'<rect x="72" y="{y}" width="100" height="12" rx="5" fill="{STEEL}"/>'
+    body += f'<rect x="0" y="54" width="14" height="20" rx="5" fill="{STEEL}"/>'
+    body += f'<rect x="178" y="20" width="14" height="88" rx="5" fill="{STEEL}"/>'
+    body += f'<rect x="10" y="12" width="172" height="104" rx="22" fill="url(#roof)" stroke="{dark(c, 0.42)}" stroke-width="4"/>'
+    body += '<rect x="18" y="20" width="58" height="88" rx="14" fill="url(#panel)"/>'
+    body += '<rect x="26" y="58" width="42" height="12" rx="6" fill="#ffffff" fill-opacity="0.34"/>'
+    body += f'<rect x="82" y="26" width="96" height="76" rx="30" fill="url(#boiler)" stroke="{dark(c, 0.45)}" stroke-width="4"/>'
+    for x in (98, 164):
+        body += f'<line x1="{x}" y1="31" x2="{x}" y2="97" stroke="{STEEL}" stroke-width="5" stroke-linecap="round"/>'
+    body += '<circle cx="117" cy="64" r="12" fill="url(#dome)"/>'
+    body += f'<circle cx="144" cy="64" r="17" fill="{STEEL}"/><circle cx="144" cy="64" r="10" fill="#05021c"/>'
+    body += f'<circle cx="144" cy="64" r="15" fill="none" stroke="{light(c, 0.3)}" stroke-width="2.5" stroke-opacity="0.7"/>'
+    body += f'<circle cx="176" cy="64" r="11" fill="{STEEL}"/><circle cx="176" cy="64" r="8" fill="url(#lamp)"/>'
+    return doc(196, 128, body)
+
+
+UI = os.path.join(os.path.dirname(__file__), "..", "assets", "ui")
+TRAY = "453a9e"
+SLOT = "2a2370"
+BUTTONS = {"violet": "6a55f2", "dark": "3a3095", "green": "2fb344"}
 
 
 def tray():
@@ -155,10 +133,10 @@ def socket():
     d = grad("in", 4, 70, [(0, "#000000", 0.55), (1, "#000000", 0)]) \
         + grad("ring", 0, 140, [(0, "#ffffff", 1), (1, "#c8c8c8", 1)])
     body = f"<defs>{d}</defs>"
-    body += '<rect x="4" y="4" width="124" height="132" rx="28" fill="#6a6a6a" fill-opacity="0.9"/>'
-    body += '<rect x="4" y="4" width="124" height="132" rx="28" fill="url(#in)"/>'
-    body += '<rect x="5" y="5" width="122" height="130" rx="27" fill="none" stroke="url(#ring)" stroke-width="9"/>'
-    return doc(132, 140, body)
+    body += '<rect x="4" y="4" width="128" height="116" rx="26" fill="#6a6a6a" fill-opacity="0.9"/>'
+    body += '<rect x="4" y="4" width="128" height="116" rx="26" fill="url(#in)"/>'
+    body += '<rect x="5" y="5" width="126" height="114" rx="25" fill="none" stroke="url(#ring)" stroke-width="9"/>'
+    return doc(136, 124, body)
 
 
 def tie():

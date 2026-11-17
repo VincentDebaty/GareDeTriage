@@ -47,6 +47,8 @@ var _level_index: int = 0
 var _game: Game
 var _wagons: Dictionary = {}
 var _locos: Array[Node2D] = []
+## Locomotives des trains à venir, garées sur la voie du bas (la première est la prochaine).
+var _queue: Array[Node2D] = []
 ## États précédents, pour le bouton « Annuler ».
 var _history: Array[Game] = []
 ## Wagons mystère déjà dévoilés (identifiant -> true).
@@ -243,8 +245,8 @@ func _build_ui() -> void:
 	_stars_label = _label(26)
 	_hint = _label(23)
 	_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_pending_label = _label(26)
-	_pending_label.text = "Trains à venir :"
+	_pending_label = _label(22)
+	_pending_label.text = "Prochains trains"
 	_restart = _button("Recommencer", 26, func() -> void: _start_level(_level_index))
 	_undo_button = _button("Annuler", 26, _undo)
 	for c: Control in [_title, _stars_label, _hint, _pending_label, _restart, _undo_button]:
@@ -306,7 +308,9 @@ func _layout_ui() -> void:
 	_stars_label.position = Vector2(40.0, 140.0 + dy)
 	_hint.position = Vector2(40.0, 196.0 + dy)
 	_hint.size = Vector2(sz.x - 80.0, 70.0)
-	_pending_label.position = Vector2(40.0, sz.y * 0.962 - 18.0)
+	# Légende de la voie des locomotives en attente, seulement s'il y a la place.
+	_pending_label.position = Vector2(26.0, _queue_y() - 68.0)
+	_pending_label.visible = _queue_y() - 68.0 > _lane_y(2) + 86.0
 	_overlay.position = Vector2.ZERO
 	_overlay.size = sz
 	_overlay_label.position = Vector2(0.0, sz.y * 0.30)
@@ -420,7 +424,7 @@ func _collector_y() -> float:
 
 ## Ordonnée d'une voie de destination : 0 = attente, 1.. = quais.
 func _lane_y(lane: int) -> float:
-	return maxf(_size().y * 0.72, _collector_y() + 2.0 * BEND) + lane * _size().y * 0.08
+	return maxf(_size().y * 0.72, _collector_y() + 2.0 * BEND) + lane * _size().y * 0.072
 
 
 func _buffer_pos(b: int) -> Vector2:
@@ -429,6 +433,16 @@ func _buffer_pos(b: int) -> Vector2:
 
 func _loco_pos(slot: int) -> Vector2:
 	return Vector2(_size().x - 120.0, _lane_y(slot + 1))
+
+
+## Voie de garage, en bas de l'écran : les locomotives des trains à venir y attendent.
+func _queue_y() -> float:
+	return _size().y * 0.962
+
+
+## Place de la i-ième locomotive en attente (0 = la prochaine, à gauche).
+func _queue_pos(i: int) -> Vector2:
+	return Vector2(74.0 + i * 88.0, _queue_y())
 
 
 func _slot_pos(slot: int, k: int) -> Vector2:
@@ -491,6 +505,7 @@ func _rebuild() -> void:
 		child.queue_free()
 	_wagons.clear()
 	_locos.clear()
+	_queue.clear()
 	var ids: Array[int] = []
 	for track: Array in _game.tracks:
 		ids.append_array(track)
@@ -509,6 +524,14 @@ func _rebuild() -> void:
 		_slot_applied.append(_view_seq)
 		_slot_view.append({"color": _game.slots[s]["color"], "size": _game.slots[s]["size"]})
 	_pending_view = _pending_snapshot()
+	# Une locomotive par train à venir, tournée vers la gauche, sa longueur écrite dessus.
+	for p: int in _game.pending.size():
+		var waiting: Node2D = _new_piece(_game.pending[p], true)
+		waiting.set("label", str(_game.pending_sizes[p]))
+		waiting.set("heading", PI)
+		waiting.scale = Vector2(0.86, 0.86)
+		waiting.position = _queue_pos(p)
+		_queue.append(waiting)
 	_buffer_view = _game.buffer_size
 	_view_applied = _view_seq
 	_relayout(0.0)
@@ -565,6 +588,18 @@ func _spawn_loco(slot: int, delay: float = -1.0) -> void:
 	if delay < 0.0:
 		loco.position = _loco_pos(slot)
 		return
+	# La première locomotive de la voie de garage sort par la gauche pendant que le
+	# train précédent s'en va, puis entre à quai ; les suivantes avancent d'une place.
+	if not _queue.is_empty():
+		var leaving: Node2D = _queue.pop_front()
+		var out: Tween = leaving.create_tween()
+		out.tween_interval(maxf(0.0, delay - 0.42))
+		out.tween_property(leaving, "position:x", -160.0, 0.40).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		out.tween_callback(leaving.queue_free)
+		for i: int in _queue.size():
+			var shift: Tween = _queue[i].create_tween()
+			shift.tween_interval(maxf(0.0, delay - 0.30) + 0.04 * i)
+			shift.tween_property(_queue[i], "position", _queue_pos(i), 0.34).set_trans(Tween.TRANS_SINE)
 	loco.position = Vector2(-200.0, _loco_pos(slot).y)
 	var tw: Tween = loco.create_tween()
 	tw.tween_interval(delay)
@@ -619,10 +654,22 @@ func _roll(node: Node2D, corners: Array[Vector2], target: Vector2, delay: float,
 		if on_start.is_valid():
 			on_start.call())
 	tw.tween_method(func(t: float) -> void:
-		node.position = curve.sample_baked(t * curve.get_baked_length()),
+		var length: float = curve.get_baked_length()
+		var at: float = t * length
+		node.position = curve.sample_baked(at)
+		# Le wagon s'aligne sur les rails. Il est symétrique : on garde le sens le plus
+		# proche de son orientation actuelle, donc il recule sans jamais se retourner.
+		var along: Vector2 = curve.sample_baked(minf(at + 5.0, length)) - curve.sample_baked(maxf(at - 5.0, 0.0))
+		if along.length() > 0.01:
+			var angle: float = along.angle()
+			if absf(angle_difference(float(node.get("heading")), angle)) > PI / 2.0:
+				angle += PI
+			node.set("heading", angle),
 		0.0, 1.0, ROLL_TIME).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	tw.tween_callback(func() -> void:
 		node.position = target
+		# Toutes les destinations sont des voies horizontales.
+		node.set("heading", 0.0)
 		node.z_index = 0
 		node.remove_meta("move")
 		node.remove_meta("roll_target")
@@ -659,6 +706,8 @@ func _relayout(duration: float, skip: Array = []) -> void:
 			var id: int = _game.tracks[t][k]
 			var w: Node2D = _wagons[id]
 			_move(w, _track_pos(t, k), duration)
+			# Sur une voie d'arrivée, les wagons regardent vers le bas, dans le sens de la marche.
+			w.set("heading", PI / 2.0)
 			w.coupled = k > 0 and _game.linked[_game.tracks[t][k - 1]] == 1
 			if k == 0 and w.masked:
 				_reveal(id, duration > 0.0)
@@ -669,6 +718,7 @@ func _relayout(duration: float, skip: Array = []) -> void:
 				and waiting.get_meta("roll_target") == _buffer_pos(b)
 		if not skip.has(_game.buffer[b]) and not rolling:
 			_move(waiting, _buffer_pos(b), duration)
+			waiting.set("heading", 0.0)
 	# Les wagons à quai sont placés par leurs propres animations ; on ne les
 	# repositionne ici que pour un placement immédiat (changement de taille d'écran).
 	if duration <= 0.0:
@@ -676,6 +726,7 @@ func _relayout(duration: float, skip: Array = []) -> void:
 			var ids: Array = _game.slots[s]["ids"]
 			for k: int in ids.size():
 				_move(_wagons[ids[k]], _slot_pos(s, k), 0.0)
+				_wagons[ids[k]].set("heading", 0.0)
 	queue_redraw()
 
 
@@ -849,7 +900,7 @@ func _undo() -> void:
 
 func _smoke() -> CPUParticles2D:
 	var p: CPUParticles2D = CPUParticles2D.new()
-	p.position = Vector2(26.0, -20.0)
+	p.position = Vector2(35.0, -6.0)
 	p.amount = 18
 	p.lifetime = 0.8
 	p.local_coords = false
@@ -990,7 +1041,7 @@ func _switch(at: Vector2, toward: Vector2) -> void:
 
 ## Emplacement à remplir : un creux teinté, cerclé de la couleur attendue.
 func _place(center: Vector2, color: Color) -> void:
-	draw_texture_rect(_tex["socket"], Rect2(center - Vector2(33.0, 33.0), Vector2(66.0, 70.0)), false, color)
+	draw_texture_rect(_tex["socket"], Rect2(center - Vector2(34.0, 28.0), Vector2(68.0, 62.0)), false, color)
 
 
 func _draw() -> void:
@@ -1058,14 +1109,11 @@ func _draw() -> void:
 			continue
 		for k: int in int(_slot_view[s]["size"]):
 			_place(_slot_pos(s, k), PALETTE[_slot_view[s]["color"]])
-	# Trains à venir : couleur et longueur.
-	for p: int in _pending_view.size():
-		var center: Vector2 = Vector2(266.0 + p * 40.0, sz.y * 0.962)
-		draw_texture_rect(_tex["chip_%d" % int(_pending_view[p][0])], Rect2(center - Vector2(18.0, 17.0), Vector2(36.0, 39.6)), false)
-		draw_string_outline(font, center + Vector2(-16.0, 8.0), str(_pending_view[p][1]),
-			HORIZONTAL_ALIGNMENT_CENTER, 32.0, 21, 6, INK)
-		draw_string(font, center + Vector2(-16.0, 8.0), str(_pending_view[p][1]),
-			HORIZONTAL_ALIGNMENT_CENTER, 32.0, 21, Color.WHITE)
+	# Voie de garage des locomotives à venir.
+	var garage: PackedVector2Array = PackedVector2Array([Vector2(-40.0, _queue_y()), Vector2(sz.x + 40.0, _queue_y())])
+	_bed(garage)
+	_ties(garage)
+	_rails(garage)
 
 
 # --- Vérification automatique --------------------------------------------------
